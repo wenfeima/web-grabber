@@ -1387,6 +1387,26 @@ def is_aiart_collections_url(url):
     return 'aiart.pics' in (url or '') and 'collection' in (url or '').lower()
 
 
+def _is_paging_path(path):
+    """判断路径是否为分页/导航类（不应作为内容页入队）。
+    匹配：/list/0-1-6、/photo/list/0-1、/index/N、/page/N、/category/xxx/N 等。
+    内容页特征：末段为单段数字（/photo/show/123456）或普通文件名。"""
+    if not path or path == '/':
+        return False
+    segs = [s for s in path.split('/') if s]
+    last = segs[-1] if segs else ''
+    # 末段形如 0-1、0-1-6（多段连字符数字）-> 典型分页/分类翻页
+    if re.fullmatch(r'\d+(-\d+)+', last):
+        return True
+    # 路径含导航段 且 末段为数字（/list/N、/index/N、/page/N、/category/N、/tag/N 等）
+    if re.fullmatch(r'\d+', last) and any(seg.lower() in ('list', 'index', 'page', 'category', 'tag', 'cat', 'p', 'pag') for seg in segs[:-1]):
+        return True
+    # 明显的分页关键词路径（即使末段不是纯数字，如 /list/xxx/1）
+    if any(seg.lower() in ('page', 'pagination', 'pages') for seg in segs):
+        return True
+    return False
+
+
 def _extract_site_links(html, base_url, host):
     """提取页面内同域名的普通页面链接（去静态资源/锚点）"""
     links = set()
@@ -1403,12 +1423,17 @@ def _extract_site_links(html, base_url, host):
         full = urllib.parse.urldefrag(full)[0]
         if re.search(r'\.(jpg|jpeg|png|gif|webp|css|js|ico|svg|zip|rar|pdf|mp4|mp3)$', full, re.I):
             continue
+        # 排除分页/导航类链接（BFS 不应把"列表分页"当内容页抓，否则无限翻页+空文件夹）
+        _path = urllib.parse.urlparse(full).path.rstrip('/')
+        if _is_paging_path(_path):
+            continue
         links.add(full)
     return links
 
 
 def grab_site(url, save_dir, cookie='', proxy='', grab_img=True, grab_vid=True,
-              log=None, page_limit=0, progress_cb=None, stop_flag=None, max_pages=300, stop_event=None):
+              log=None, page_limit=0, progress_cb=None, stop_flag=None, max_pages=300, stop_event=None,
+              max_threads=4):
     """全站抓取：从入口 URL 出发 BFS 遍历同域名所有页面，
     每页按「站点名/页面标题」分文件夹保存图片/视频。
     page_limit: 最多抓取页面数，0=全部（有 max_pages 安全上限防止失控）。
@@ -1455,32 +1480,43 @@ def grab_site(url, save_dir, cookie='', proxy='', grab_img=True, grab_vid=True,
             imgs, vids = [], []
         os.makedirs(page_dir, exist_ok=True)
         n = 0
-        if grab_img:
-            for i, u in enumerate(imgs, 1):
+        _mt = max(1, max_threads or 4)
+        # 图片并发下载（线程池），避免串行卡顿
+        if grab_img and imgs:
+            from concurrent.futures import ThreadPoolExecutor as _TPE
+            _lock = __import__('threading').Lock()
+            def _dl_one(item):
+                i, u = item
                 if stop_event is not None and stop_event.is_set():
-                    break
+                    return 0
                 ext = os.path.splitext(urllib.parse.urlparse(u).path)[1] or '.jpg'
                 fp = os.path.join(page_dir, 'img_%03d%s' % (i, ext))
                 try:
                     fetcher.download(u, fp, referer=cur)
-                    n += 1
+                    return 1
                 except Exception as e:
                     lg('    图片失败: %s' % e)
-                time.sleep(0.2)
+                    return 0
+            with _TPE(max_workers=_mt) as _ex:
+                n = sum(_ex.map(_dl_one, list(enumerate(imgs, 1))))
         if grab_vid:
-            for i, u in enumerate(vids, 1):
+            from concurrent.futures import ThreadPoolExecutor as _TPE
+            def _dl_one_v(item):
+                i, u = item
                 if stop_event is not None and stop_event.is_set():
-                    break
+                    return 0
                 path = urllib.parse.urlparse(u).path
                 ext = os.path.splitext(path)[1] or '.mp4'
                 base = os.path.basename(path) or ('video_%03d' % i)
                 fp = os.path.join(page_dir, base if base.lower().endswith(ext) else 'video_%03d%s' % (i, ext))
                 try:
                     fetcher.download(u, fp, timeout=20, referer=cur)
-                    n += 1
+                    return 1
                 except Exception as e:
                     lg('    视频失败: %s' % e)
-                time.sleep(0.2)
+                    return 0
+            with _TPE(max_workers=_mt) as _ex:
+                n += sum(_ex.map(_dl_one_v, list(enumerate(vids, 1))))
         pages += 1
         total_files += n
         lg('  [页%d/%d] %s -> %d 个文件' % (pages, limit, title, n))

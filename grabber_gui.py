@@ -640,7 +640,8 @@ class GrabberApp:
                 core.grab_site(url, save_dir, cookie=self.cookie, proxy=proxy,
                                grab_img=grab_img, grab_vid=grab_vid, log=log,
                                page_limit=limit, progress_cb=cb,
-                               stop_flag=self.stop_flag, stop_event=self.stop_flag)
+                               stop_flag=self.stop_flag, stop_event=self.stop_flag,
+                               max_threads=threads)
                 self._update_task(url, status='完成')
             except Exception as e:
                 log('抓取失败: %s' % e)
