@@ -36,11 +36,18 @@ class GrabError(Exception):
 class Fetcher:
     """带 cookie / 代理的页面抓取器"""
 
+    # 下载引擎：'auto' / 'internal' / 'idm' / 'aria2'（类级默认，GUI 可覆盖）
+    engine = 'auto'
+    # 检测到的引擎信息，格式 {'engine':..., 'path':..., 'desc':...}，None 表示未检测/用内置
+    engine_info = None
+
     def __init__(self, cookie='', proxy='', stop_event=None):
         self.cookie = cookie
         self.proxy = proxy
         self.stop_event = stop_event
         self._opener = None
+        # 实例级也保留一份，便于单实例覆盖
+        self.engine = Fetcher.engine
 
     def _get_opener(self):
         if self._opener is None:
@@ -69,6 +76,314 @@ class Fetcher:
         query = urllib.parse.quote(parts.query, safe="=&%/?+$,;~*'()!-._:@")
         return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, query, parts.fragment))
 
+    # ---------------- 外部下载引擎（提速） ----------------
+    @staticmethod
+    def find_idm():
+        """检测 IDM 安装路径"""
+        import glob as _g
+        cands = []
+        try:
+            import winreg
+            for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+                try:
+                    k = winreg.OpenKey(hive, r"Software\DownloadManager")
+                    v, _ = winreg.QueryValueEx(k, "ExePath")
+                    if v and os.path.exists(v):
+                        cands.append(v)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        for p in (r"C:\Program Files (x86)\Internet Download Manager\IDMan.exe",
+                  r"C:\Program Files\Internet Download Manager\IDMan.exe",
+                  r"D:\Program Files (x86)\Internet Download Manager\IDMan.exe",
+                  r"D:\Program Files\Internet Download Manager\IDMan.exe"):
+            if os.path.exists(p):
+                cands.append(p)
+        # 去重
+        seen = set(); out = []
+        for c in cands:
+            if c.lower() not in seen:
+                seen.add(c.lower()); out.append(c)
+        return out[0] if out else None
+
+    @staticmethod
+    def find_aria2():
+        """检测 aria2c.exe：优先 exe/脚本同目录，其次 PATH"""
+        import shutil as _sh
+        # 与主程序同目录（打包/exe 场景）或本文件同目录（源码场景）
+        base = None
+        try:
+            if getattr(__import__('sys'), 'frozen', False):
+                base = os.path.dirname(__import__('sys').executable)
+            else:
+                base = os.path.dirname(os.path.abspath(__file__))
+        except Exception:
+            pass
+        cands = []
+        if base:
+            for n in ('aria2c.exe', 'aria2c', 'aria2c-1.36.0-win-64bit-build1.exe'):
+                p = os.path.join(base, n)
+                if os.path.exists(p):
+                    cands.append(p)
+        try:
+            _sh.which('aria2c') and cands.append(_sh.which('aria2c'))
+        except Exception:
+            pass
+        seen = set(); out = []
+        for c in cands:
+            if c.lower() not in seen:
+                seen.add(c.lower()); out.append(c)
+        return out[0] if out else None
+
+    @staticmethod
+    def detect_engine():
+        """返回 (engine, path, desc)。auto 时优先 aria2（可控、支持 referer），其次 IDM"""
+        a = Fetcher.find_aria2()
+        if a:
+            return ('aria2', a, 'aria2 多线程 (%s)' % os.path.basename(a))
+        i = Fetcher.find_idm()
+        if i:
+            return ('idm', i, 'IDM (%s)' % os.path.basename(i))
+        return (None, None, None)
+
+    @staticmethod
+    def engine_path():
+        """外部引擎可执行文件绝对路径；无则 None"""
+        if Fetcher.engine_info:
+            return Fetcher.engine_info.get('path')
+        return None
+
+    def _engine_download(self, url, filepath, referer=None, timeout=120):
+        """用外部引擎下载单个文件。成功返回最终字节数；失败/不可用抛异常。"""
+        import subprocess as _sp
+        _dir = os.path.dirname(filepath) or '.'
+        _name = os.path.basename(filepath)
+        _url = self._safe_url(url)
+        _engine = Fetcher.engine if Fetcher.engine != 'auto' else (Fetcher.engine_info or {}).get('engine')
+        _path = Fetcher.engine_path()
+        if not _engine or not _path or not os.path.exists(_path):
+            raise GrabError('外部引擎不可用')
+
+        if _engine == 'aria2':
+            cmd = [_path, '--continue=true',
+                   '-x', '16', '-s', '16', '-k', '1M',
+                   '--file-allocation=none',
+                   '--timeout=30', '--connect-timeout=30', '--retry-wait=3',
+                   '--max-tries=3',
+                   '-d', _dir, '-o', _name]
+            cmd += ['--user-agent=' + UA]
+            if self.cookie:
+                cmd.append('--header=Cookie: ' + self.cookie)
+            if referer:
+                cmd.append('--referer=' + referer)
+            if self.proxy:
+                cmd.append('--all-proxy=' + self.proxy)
+            cmd.append(_url)
+            # 停止检查：外部进程无法逐块中断，但停止时杀掉进程
+            try:
+                proc = _sp.Popen(cmd, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+                while proc.poll() is None:
+                    if self.stop_event is not None and self.stop_event.is_set():
+                        try:
+                            proc.terminate()
+                        except Exception:
+                            pass
+                        raise GrabError('已停止')
+                    time.sleep(0.2)
+                if proc.returncode != 0:
+                    raise IOError('aria2 下载失败 rc=%d' % proc.returncode)
+                return os.path.getsize(filepath)
+            except GrabError:
+                raise
+            except Exception as e:
+                raise IOError('aria2 调用失败: %s' % e)
+
+        elif _engine == 'idm':
+            # IDM：添加任务到其队列并自动开始，IDM 内部多线程下载。
+            # IDM 是异步的：添加一次任务，等待文件出现且大小稳定视为该文件完成。
+            try:
+                _sp.Popen([_path, '/d', _url, '/p', _dir, '/f', _name, '/a'],
+                          stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+            except Exception as e:
+                raise IOError('IDM 调用失败: %s' % e)
+            deadline = time.time() + max(timeout, 90)
+            last_size = -1
+            stable_cnt = 0
+            while time.time() < deadline:
+                if self.stop_event is not None and self.stop_event.is_set():
+                    raise GrabError('已停止')
+                sz = os.path.getsize(filepath) if os.path.exists(filepath) else -1
+                if sz < 0:
+                    # 文件尚未出现：给 IDM 一点启动时间
+                    time.sleep(0.3)
+                    continue
+                if sz > 0 and sz == last_size:
+                    stable_cnt += 1
+                    if stable_cnt >= 10:   # 约2秒大小不变 -> 视为完成
+                        return sz
+                else:
+                    last_size = sz
+                    stable_cnt = 0
+                time.sleep(0.2)
+            raise IOError('IDM 下载超时（任务已加入 IDM 队列，可查看 IDM 窗口进度）')
+
+        raise GrabError('未知外部引擎: %s' % _engine)
+
+    def _dl_multipart(self, url, filepath, referer=None, timeout=30, retries=3, max_segments=8):
+        """内置多线程分段下载（Range 并发），提速用。
+        服务器支持 Range 且文件较大时把文件切成多段并发下载再合并。
+        返回最终字节数；不支持 Range / 文件过小 / 被中断 -> 返回 None（由调用方回退单线程）。"""
+        import threading as _th
+        headers = dict(BROWSER_HEADERS)
+        if self.cookie:
+            headers['Cookie'] = self.cookie
+        if referer:
+            headers['Referer'] = referer
+
+        # 探测：请求第一个字节，看是否 206 + Content-Range
+        probe = dict(headers)
+        probe['Range'] = 'bytes=0-0'
+        try:
+            req = urllib.request.Request(self._safe_url(url), headers=probe)
+            resp = self._open(req, timeout)
+        except Exception:
+            return None
+        if getattr(resp, 'status', None) != 206:
+            try:
+                resp.close()
+            except Exception:
+                pass
+            return None
+        total = None
+        cr = resp.headers.get('Content-Range') or ''
+        m = re.search(r'/(\d+)\s*$', cr)
+        if m:
+            total = int(m.group(1))
+        try:
+            resp.close()
+        except Exception:
+            pass
+        if not total or total <= 0:
+            return None
+        # 文件太小（<512KB）分段收益低，走单线程
+        if total < 512 * 1024:
+            return None
+
+        # 计算分段数：尽量每个分片 >=256KB
+        segs = max_segments
+        max_ok = total // (256 * 1024)
+        if max_ok < segs:
+            segs = max(1, max_ok)
+        parts = []
+        for i in range(segs):
+            start = total * i // segs
+            end = total * (i + 1) // segs - 1
+            if i == segs - 1:
+                end = total - 1
+            parts.append((start, end))
+
+        _dir = os.path.dirname(filepath) or '.'
+        _base = os.path.basename(filepath)
+        results = [None] * segs
+        cancel = [False]
+        lock = _th.Lock()
+
+        def _one(idx, start, end):
+            pfile = os.path.join(_dir, '.%s.part%d' % (_base, idx))
+            h = dict(headers)
+            h['Range'] = 'bytes=%d-%d' % (start, end)
+            for attempt in range(retries + 1):
+                if cancel[0] or (self.stop_event is not None and self.stop_event.is_set()):
+                    return
+                try:
+                    r = self._open(urllib.request.Request(self._safe_url(url), headers=h), timeout)
+                    if getattr(r, 'status', None) != 206:
+                        # 服务器忽略 Range 返回全量 -> 不支持分段，整体回退
+                        with lock:
+                            cancel[0] = True
+                        return
+                    with open(pfile, 'wb') as f:
+                        while True:
+                            if self.stop_event is not None and self.stop_event.is_set():
+                                with lock:
+                                    cancel[0] = True
+                                return
+                            chunk = r.read(65536)
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                    with lock:
+                        results[idx] = pfile
+                    return
+                except Exception:
+                    if attempt >= retries:
+                        with lock:
+                            cancel[0] = True
+                        return
+                    time.sleep(1.0 * (attempt + 1))
+
+        threads = []
+        for idx, (s, e) in enumerate(parts):
+            t = _th.Thread(target=_one, args=(idx, s, e), daemon=True)
+            t.start()
+            threads.append(t)
+        # 停止时不等卡住的网络 read：给 join 加超时（daemon 线程随进程退出）
+        if self.stop_event is not None and self.stop_event.is_set():
+            _join_to = 0.5
+        else:
+            _join_to = None
+        for t in threads:
+            t.join(_join_to)
+
+        if cancel[0]:
+            # 被中断 / 不支持分段：清理分片，回退单线程
+            for p in results:
+                if p and os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
+            return None
+
+        # 合并分片
+        try:
+            with open(filepath, 'wb') as out:
+                for idx in range(segs):
+                    p = results[idx]
+                    if not p or not os.path.exists(p):
+                        raise IOError('分片缺失')
+                    with open(p, 'rb') as f:
+                        while True:
+                            chunk = f.read(65536)
+                            if not chunk:
+                                break
+                            out.write(chunk)
+        except Exception:
+            for p in results:
+                if p and os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
+            if os.path.exists(filepath):
+                try:
+                    os.remove(filepath)
+                except Exception:
+                    pass
+            raise
+        # 清理分片
+        for p in results:
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+        final = os.path.getsize(filepath)
+        if final != total:
+            raise IOError('下载不完整: %d/%d bytes' % (final, total))
+        return final
+
     def fetch(self, url, timeout=20, referer=None):
         headers = dict(BROWSER_HEADERS)
         if self.cookie:
@@ -86,14 +401,57 @@ class Fetcher:
         return text
 
     def download(self, url, filepath, timeout=30, referer=None, retries=3):
-        """下载文件，带重试 + 断点续传。
+        """下载文件，带重试 + 断点续传。可选的：外部引擎(aria2/IDM)提速。
         retries: 最大重试次数（0 表示不重试）。失败或读取中断时自动续传已下载部分。"""
         import os as _os
+        # 外部引擎分发（除非显式 internal）
+        _use_ext = Fetcher.engine != 'internal'
+        if _use_ext and Fetcher.engine == 'auto' and Fetcher.engine_info is None:
+            Fetcher.engine_info = {'engine': None, 'path': None, 'desc': None}
+        if _use_ext and Fetcher.engine == 'auto' and Fetcher.engine_info.get('engine') is None:
+            try:
+                e, p, d = Fetcher.detect_engine()
+                Fetcher.engine_info = {'engine': e, 'path': p, 'desc': d}
+            except Exception:
+                Fetcher.engine_info = {'engine': None, 'path': None, 'desc': None}
+        if _use_ext:
+            _ext = Fetcher.engine if Fetcher.engine != 'auto' else (Fetcher.engine_info or {}).get('engine')
+            if _ext and _ext != 'internal':
+                if _ext == 'idm':
+                    # IDM 是异步下载器：添加一次任务后轮询等待完成。
+                    # 不做重试/清理（任务仍在 IDM 队列，清理会丢下载）。
+                    return self._engine_download(url, filepath, referer=referer, timeout=timeout)
+                for attempt in range(retries + 1):
+                    try:
+                        # aria2 同步阻塞，自带断点续传
+                        return self._engine_download(url, filepath, referer=referer, timeout=timeout)
+                    except GrabError:
+                        raise
+                    except Exception as e:
+                        if attempt >= retries:
+                            # 外部引擎彻底失败：清理半成品，回退内置下载一次
+                            try:
+                                if os.path.exists(filepath):
+                                    os.remove(filepath)
+                            except Exception:
+                                pass
+                            break
+                        time.sleep(1.5 * (attempt + 1))
         headers = dict(BROWSER_HEADERS)
         if self.cookie:
             headers['Cookie'] = self.cookie
         if referer:
             headers['Referer'] = referer
+
+        # 内置提速：优先多线程分段下载；失败/不支持时回退下方单线程
+        try:
+            _r = self._dl_multipart(url, filepath, referer=referer, timeout=timeout, retries=retries)
+            if _r is not None:
+                return _r
+        except GrabError:
+            raise
+        except Exception:
+            pass
 
         last = None
         for attempt in range(retries + 1):

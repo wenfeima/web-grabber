@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v16'
+APP_VERSION = 'v17'
 import os
 import re
 import sys
@@ -101,7 +101,9 @@ class GrabberApp:
         self.grab_img.set(bool(self.cfg.get('grab_img', True)))
         self.grab_vid.set(bool(self.cfg.get('grab_vid', True)))
         self.mode_var.set(self.cfg.get('mode', '自动'))
+        self.engine_var.set(self.cfg.get('engine', '自动'))
         self._on_proxy_toggle()
+        self._on_engine_change()
         self._update_url_list()
 
     def _save_settings(self):
@@ -116,6 +118,7 @@ class GrabberApp:
             'grab_img': bool(self.grab_img.get()),
             'grab_vid': bool(self.grab_vid.get()),
             'mode': self.mode_var.get(),
+            'engine': self.engine_var.get(),
         })
         save_config(self.cfg)
 
@@ -125,6 +128,39 @@ class GrabberApp:
             self.proxy_entry.configure(state='normal')
         else:
             self.proxy_entry.configure(state='disabled')
+
+    def _on_engine_change(self):
+        """下载引擎切换：auto 时检测外部引擎并提示"""
+        eng = self.engine_var.get()
+        core.Fetcher.engine = {
+            '自动': 'auto', '内置': 'internal', 'IDM': 'idm', 'aria2': 'aria2'
+        }.get(eng, 'auto')
+        # auto 模式下立即探测一次，把结果写到配置显示
+        try:
+            core.Fetcher.engine_info = None
+            if eng == '自动':
+                e, p, d = core.Fetcher.detect_engine()
+                core.Fetcher.engine_info = {'engine': e, 'path': p, 'desc': d}
+                if hasattr(self, 'engine_hint'):
+                    if e:
+                        self.engine_hint.configure(
+                            text='  检测到: %s' % d, foreground='#2a7')
+                    else:
+                        self.engine_hint.configure(
+                            text='  未检测到 aria2/IDM，使用内置下载', foreground='#888')
+            elif hasattr(self, 'engine_hint'):
+                if eng == '内置':
+                    self.engine_hint.configure(text='  使用内置下载（多线程分段）', foreground='#2a7')
+                else:
+                    _p = core.Fetcher.engine_path()
+                    if _p:
+                        self.engine_hint.configure(
+                            text='  使用 %s (%s)' % (eng, os.path.basename(_p)), foreground='#2a7')
+                    else:
+                        self.engine_hint.configure(
+                            text='  未找到 %s，将回退内置下载' % eng, foreground='#c60')
+        except Exception:
+            pass
 
     # ---------------- UI ----------------
     def _build_ui(self):
@@ -195,6 +231,15 @@ class GrabberApp:
         ttk.Label(opt, text='  页码(0=全部):').pack(side='left', padx=(12, 2))
         self.limit_var = tk.StringVar(value='0')
         ttk.Spinbox(opt, from_=0, to=5000, textvariable=self.limit_var, width=6).pack(side='left')
+
+        ttk.Label(opt, text='  引擎:').pack(side='left', padx=(12, 2))
+        self.engine_var = tk.StringVar(value='自动')
+        self.engine_combo = ttk.Combobox(opt, textvariable=self.engine_var, state='readonly', width=6,
+                                         values=('自动', '内置', 'IDM', 'aria2'))
+        self.engine_combo.pack(side='left', padx=2)
+        self.engine_combo.bind('<<ComboboxSelected>>', lambda e: self._on_engine_change())
+        self.engine_hint = ttk.Label(opt, text='', foreground='#888')
+        self.engine_hint.pack(side='left', padx=(6, 0))
 
         # ---- 第5行：登录状态 + 按钮 ----
         self.login_label = ttk.Label(frm, text='登录状态: 未登录（不需要登录的网站可忽略）',
