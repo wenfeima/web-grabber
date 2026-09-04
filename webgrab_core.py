@@ -1443,10 +1443,10 @@ def grab_site(url, save_dir, cookie='', proxy='', grab_img=True, grab_vid=True,
         if log:
             log(msg)
 
-    # 站点名 = 域名
+    # 站点名 = 域名（仅用于日志显示；目录分层已由 GUI 统一处理）
     p0 = urllib.parse.urlparse(url)
     site_name = p0.netloc.replace('www.', '') or 'site'
-    base_dir = os.path.join(save_dir, sanitize_filename(site_name))
+    base_dir = save_dir
     os.makedirs(base_dir, exist_ok=True)
 
     fetcher = Fetcher(cookie, proxy, stop_event)

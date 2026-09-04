@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v17'
+APP_VERSION = 'v18'
 import os
 import re
 import sys
@@ -558,6 +558,16 @@ class GrabberApp:
             log('使用代理: %s' % proxy)
         else:
             log('直连模式（不经过代理）')
+        # 保存路径统一套一层"网站域名"文件夹：保存目录/域名/标题/...
+        if url:
+            try:
+                _h = urllib.parse.urlparse(url).netloc.replace('www.', '')
+                if _h:
+                    save_dir = os.path.join(save_dir, core.sanitize_filename(_h))
+                    os.makedirs(save_dir, exist_ok=True)
+                    log('保存到: %s' % save_dir)
+            except Exception:
+                pass
 
         # aiart.pics 专用抓取（AI 艺术图库）
         if core.is_aiart_url(url):
