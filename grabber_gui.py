@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v18'
+APP_VERSION = 'v19'
 import os
 import re
 import sys
@@ -218,6 +218,10 @@ class GrabberApp:
         self.mode_var = tk.StringVar(value='自动')
         ttk.Combobox(opt, textvariable=self.mode_var, state='readonly', width=12,
                      values=('自动', '单个网页', '论坛列表页', '全站抓取')).pack(side='left', padx=2)
+
+        self.browser_mode = tk.BooleanVar(value=False)
+        ttk.Checkbutton(opt, text='浏览器模式', variable=self.browser_mode,
+                        command=self._on_browser_mode).pack(side='left', padx=8)
 
         self.grab_img = tk.BooleanVar(value=True)
         self.grab_vid = tk.BooleanVar(value=True)
@@ -545,6 +549,10 @@ class GrabberApp:
             url, save_dir, threads, limit, grab_img, grab_vid, proxy, mode, _preview), daemon=True)
         self.worker.start()
 
+    def _on_browser_mode(self):
+        if self.browser_mode.get():
+            self._log('浏览器模式：请用专用快捷方式启动 Edge（含油猴/登录态），需先打开 9222 调试端口')
+
     def _stop_grab(self):
         self.stop_flag.set()
         self._log('已请求停止（当前文件下载完成后停止）')
@@ -568,6 +576,55 @@ class GrabberApp:
                     log('保存到: %s' % save_dir)
             except Exception:
                 pass
+
+        # 浏览器模式：通过 CDP 连接调试模式的 Edge（含油猴/登录态）抓取
+        if self.browser_mode.get():
+            log('抓取模式: 浏览器模式（连接 Edge 调试端口）')
+            self._add_task(url, '浏览器抓取')
+            try:
+                import cdp_browser
+                if not cdp_browser.is_connected():
+                    log('错误: 未检测到调试模式的浏览器，请用专用快捷方式启动 Edge（9222 端口）')
+                    self._update_task(url, status='失败')
+                    log('========== 抓取完成 ==========')
+                    return
+                images, videos = cdp_browser.grab_page(url, wait_sec=6, scroll_times=3,
+                                                       log=log, timeout=60)
+                title = 'browser_' + str(int(time.time()))
+                folder = os.path.join(save_dir, core.sanitize_filename(title))
+                os.makedirs(folder, exist_ok=True)
+                self.stats_imgs = 0
+                self.stats_vids = 0
+                _fetcher = core.Fetcher(self.cookie, proxy, self.stop_flag)
+                from concurrent.futures import ThreadPoolExecutor
+                n = 0
+                dl_list = []
+                if grab_img:
+                    dl_list += [('img', u) for u in images]
+                if grab_vid:
+                    dl_list += [('vid', u) for u in videos]
+                def dl_one(item):
+                    kind, u = item
+                    if self.stop_flag.is_set():
+                        return 0
+                    ext = os.path.splitext(urllib.parse.urlparse(u).path)[1] or ('.jpg' if kind == 'img' else '.mp4')
+                    try:
+                        _fetcher.download(u, os.path.join(folder, kind + '_%s%s' % (abs(hash(u)) % 1000000, ext)),
+                                          referer=url, timeout=30)
+                        return 1
+                    except Exception:
+                        return 0
+                if dl_list:
+                    with ThreadPoolExecutor(max_workers=max(1, threads)) as ex:
+                        n = sum(ex.map(dl_one, dl_list))
+                self._update_task(url, progress=(n, len(dl_list)), status='完成')
+                log('浏览器模式下载完成: %d 个文件' % n)
+                self._update_task(url, status='完成')
+            except Exception as e:
+                log('浏览器模式失败: %s' % e)
+                self._update_task(url, status='失败')
+            log('========== 抓取完成 ==========')
+            return
 
         # aiart.pics 专用抓取（AI 艺术图库）
         if core.is_aiart_url(url):
