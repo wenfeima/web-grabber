@@ -1,4 +1,4 @@
-# 通用网页图片/视频抓取工具 (v17)
+# 通用网页图片/视频抓取工具 (v20)
 
 一个带 GUI 的通用网页图片/视频抓取工具，支持自定义网址抓取，抓取的图片按帖子目录分类保存。
 
@@ -22,6 +22,9 @@
 - **内置多线程分段**：单文件按 Range 并发分段下载再合并，速度接近 IDM/aria2，无需外部工具
 - **下载容错**：断点续传 + 完整性校验，失败自动重试，损坏文件自动清理
 - **停止响应**：点停止立即中断（含网络请求级中断）
+- **浏览器模式**：一键启动调试 Edge 并**内嵌到软件「浏览器」页签**（不弹独立窗口），保留油猴脚本与登录态
+  - 使用独立调试配置（自动复制你的 Edge 扩展/登录态），绕开 Chrome/Edge 136+ 对默认目录调试端口的限制
+  - 抓取时自动在页签内打开目标网址，油猴自动执行，可处理需登录/脚本渲染的图站
 
 ## 文件说明
 
@@ -29,21 +32,18 @@
 |------|------|
 | `grabber_gui.py` | 主程序（GUI），打包入口 |
 | `webgrab_core.py` | 核心抓取逻辑 |
+| `cdp_browser.py` | 浏览器模式（CDP 连接调试 Edge） |
+| `embed_edge.py` | Edge 窗口内嵌（Win32 SetParent） |
+| `edge_profile.py` | 独立调试配置（复制默认 Edge 配置） |
 | `login_window.py` | 登录辅助窗口（独立进程） |
 
 ## 打包为 EXE
 
 ```bash
-python -m PyInstaller --onefile --windowed --name "网页图片视频抓取" \
-  --hidden-import webgrab_core \
-  --hidden-import PIL --hidden-import PIL._tkinter_finder \
-  grabber_gui.py
-
-python -m PyInstaller --onefile --windowed --name "登录窗口" \
-  --hidden-import webview login_window.py
+python -m PyInstaller --noconfirm --clean "网页图片视频抓取.spec"
 ```
 
-依赖：`Pillow`（缩略图）、`pywebview`（登录窗口）。
+依赖：`Pillow`（缩略图）、`pywebview`（登录窗口）、`websocket-client`（浏览器模式）。
 
 ## 使用说明
 
@@ -52,8 +52,17 @@ python -m PyInstaller --onefile --windowed --name "登录窗口" \
 3. 可选：点"预览列表"先确认识别到的帖子，再点"开始抓取"
 4. 保存位置默认在程序目录 `TU` 下，可自定义
 
+## 浏览器模式
+
+1. 点「启动调试浏览器」→ 首次弹窗确认后自动复制你的 Edge 配置（油猴扩展+登录态，仅一次；需先完全退出 Edge）
+2. Edge 自动嵌入「浏览器」页签，可手动浏览/登录
+3. 勾选「浏览器模式」，填网址点「开始抓取」，程序自动在页签内打开网址并抓取
+
 ## 版本历史
 
+- **v20**：浏览器模式升级——Edge 窗口内嵌软件「浏览器」页签（不弹独立窗口）；独立调试配置（绕开 Edge 136+ 默认目录调试端口限制，自动复制油猴扩展/登录态）；界面内一键启动调试浏览器
+- **v19**：新增浏览器模式（CDP 连接调试 Edge，支持油猴脚本/登录态抓取）
+- **v18**：保存目录统一套网站域名文件夹；全站抓取并发下载提速；分页导航链接过滤
 - **v17**：下载提速三连——① 内置下载多线程分段（Range 并发，无需外部软件）；② 支持调用 IDM 加速；③ 支持 aria2 加速（程序目录放 aria2c.exe 即可）；引擎可选（自动/内置/IDM/aria2）
 - **v16**：标题实时显示真实标题（完成后校验）；修复点停止仍在抓取（各下载循环加停止检查）；URL 非 ASCII 编码修复；aethercms 等站适配（字母数字短 id、分页过滤、WordPress 缩略图过滤）
 - **v15**：下载完整性校验（失败删除损坏文件不残留灰色图）；完成后用详情页真实标题校验更新表格

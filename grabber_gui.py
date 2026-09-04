@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v19'
+APP_VERSION = 'v20'
 import os
 import re
 import sys
@@ -14,6 +14,7 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext
 from concurrent.futures import ThreadPoolExecutor
 from PIL import Image, ImageTk
 import io as _io
+import time
 
 # 确保能 import 核心逻辑
 CORE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -223,6 +224,12 @@ class GrabberApp:
         ttk.Checkbutton(opt, text='浏览器模式', variable=self.browser_mode,
                         command=self._on_browser_mode).pack(side='left', padx=8)
 
+        # 超链接：一键启动调试模式的 Edge（9222 端口，保留油猴/登录态）
+        self.edge_link = tk.Label(opt, text='启动调试浏览器', foreground='#1a6fd4',
+                                  cursor='hand2', font=('Microsoft YaHei UI', 9, 'underline'))
+        self.edge_link.pack(side='left', padx=(0, 8))
+        self.edge_link.bind('<Button-1>', lambda e: self._start_debug_edge())
+
         self.grab_img = tk.BooleanVar(value=True)
         self.grab_vid = tk.BooleanVar(value=True)
         ttk.Checkbutton(opt, text='抓取图片', variable=self.grab_img).pack(side='left', padx=8)
@@ -316,6 +323,17 @@ class GrabberApp:
         self.log = scrolledtext.ScrolledText(tab_log, height=12, state='disabled',
                                              font=('Consolas', 9))
         self.log.pack(fill='both', expand=True, padx=6, pady=(0, 6))
+
+        # --- 页3：浏览器（内嵌调试 Edge，放在日志后面） ---
+        tab_brw = tk.Frame(nb)
+        nb.add(tab_brw, text='浏览器')
+        self.tab_brw_host = tk.Frame(tab_brw, bg='#2b2b2b')
+        self.tab_brw_host.pack(fill='both', expand=True, padx=2, pady=2)
+        self.tab_brw_hint = ttk.Label(tab_brw,
+                                      text='尚未启动调试浏览器——点上方「启动调试浏览器」，Edge 会自动嵌入此区域',
+                                      foreground='#888')
+        self.tab_brw_hint.place(relx=0.5, rely=0.5, anchor='center')
+        self.tab_brw_host.bind('<Configure>', self._on_host_resize)
 
     def _choose_dir(self):
         d = filedialog.askdirectory(title='选择保存位置')
@@ -551,7 +569,122 @@ class GrabberApp:
 
     def _on_browser_mode(self):
         if self.browser_mode.get():
-            self._log('浏览器模式：请用专用快捷方式启动 Edge（含油猴/登录态），需先打开 9222 调试端口')
+            self._log('浏览器模式：点「启动调试浏览器」一键启动 Edge（9222 端口，含油猴/登录态），或先手动开好调试端口')
+        else:
+            self._log('浏览器模式已关闭')
+
+    def _start_debug_edge(self):
+        """超链接点击：启动/连接调试 Edge，就绪后自动嵌入「浏览器」页签"""
+        try:
+            import cdp_browser
+            if cdp_browser.is_connected():
+                self._log('调试浏览器已在运行（9222 端口就绪），正在嵌入...')
+                threading.Thread(target=self._wait_edge_ready, daemon=True).start()
+                return
+        except Exception:
+            pass
+        edge = r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+        if not os.path.isfile(edge):
+            edge = r'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
+        if not os.path.isfile(edge):
+            self._log('错误: 未找到 Edge，请安装 Microsoft Edge 后再试')
+            return
+        import edge_profile
+        if not edge_profile.profile_exists():
+            # 首次：需要复制默认配置到独立调试 profile（油猴扩展/登录态）
+            if edge_profile.is_edge_running():
+                self._log('首次使用浏览器模式需要复制 Edge 配置，请先完全退出 Edge（含后台）后再点「启动调试浏览器」')
+                return
+            if not messagebox.askyesno(
+                    '首次使用浏览器模式',
+                    '需要把你的 Edge 配置（油猴扩展 + 登录态）复制到独立的调试配置目录，\n'
+                    '约几百 MB，仅首次一次；之后日常 Edge 与抓取互不影响。\n\n是否继续？'):
+                self._log('已取消浏览器模式初始化')
+                return
+            threading.Thread(target=self._first_time_edge_setup, args=(edge,), daemon=True).start()
+            return
+        self._launch_debug_edge(edge)
+
+    def _first_time_edge_setup(self, edge):
+        """后台线程：复制 Edge 配置后启动调试浏览器"""
+        import edge_profile
+        ok, msg = edge_profile.copy_profile(log=self._log)
+        if not ok:
+            self._log('首次配置复制失败: %s' % msg)
+            return
+        self._launch_debug_edge(edge)
+
+    def _launch_debug_edge(self, edge):
+        """启动调试 Edge（独立调试 profile，端口必开；窗口屏幕外启动不弹桌面）"""
+        import edge_profile
+        try:
+            args = [edge, '--remote-debugging-port=9222',
+                    '--window-position=-32000,-32000',
+                    '--user-data-dir=' + edge_profile.DEBUG_PROFILE_DIR]
+            subprocess.Popen(args)
+            self._log('正在启动调试浏览器（Edge 9222 端口），就绪后自动嵌入「浏览器」页签...')
+        except Exception as e:
+            self._log('启动调试浏览器失败: %s' % e)
+            return
+        threading.Thread(target=self._wait_edge_ready, daemon=True).start()
+
+    def _wait_edge_ready(self):
+        """后台线程：等调试端口就绪 + 找到 Edge 窗口，回主线程嵌入"""
+        import cdp_browser
+        import embed_edge
+        ok = False
+        for _ in range(24):
+            time.sleep(0.5)
+            try:
+                if cdp_browser.is_connected():
+                    ok = True
+                    break
+            except Exception:
+                pass
+        if not ok:
+            self._log('提示: 若 Edge 已在运行而未开调试端口，请先完全退出 Edge，再点「启动调试浏览器」')
+            return
+        hwnd = embed_edge.find_edge_window(timeout=15)
+        if hwnd:
+            self._ui_q.put(('embed', hwnd))
+        else:
+            self._log('调试浏览器已就绪，但未找到 Edge 窗口，请稍后再点「启动调试浏览器」')
+
+    def _embed_edge_now(self, hwnd):
+        """主线程：把 Edge 窗口嵌入「浏览器」页签"""
+        import embed_edge
+        host = self.tab_brw_host
+        host.update_idletasks()
+        w = max(host.winfo_width(), 320)
+        h = max(host.winfo_height(), 200)
+        try:
+            embed_edge.embed_edge(hwnd, int(host.winfo_id()), 0, 0, w, h)
+            self.edge_hwnd = hwnd
+        except Exception as e:
+            self._log('嵌入 Edge 失败: %s' % e)
+            return
+        self._log('Edge 已嵌入「浏览器」页签（可手动浏览/登录，抓取时自动开标签）')
+        if hasattr(self, 'tab_brw_hint'):
+            try:
+                self.tab_brw_hint.destroy()
+            except Exception:
+                pass
+            del self.tab_brw_hint
+        # 切到浏览器页签让用户看到
+        try:
+            self.nb.select(2)
+        except Exception:
+            pass
+
+    def _on_host_resize(self, e):
+        """宿主 Frame 尺寸变化时同步调整内嵌 Edge 窗口"""
+        hwnd = getattr(self, 'edge_hwnd', None)
+        if hwnd:
+            try:
+                import embed_edge
+                embed_edge.resize_edge(hwnd, 0, 0, e.width, e.height)
+            except Exception:
+                pass
 
     def _stop_grab(self):
         self.stop_flag.set()
@@ -937,6 +1070,8 @@ class GrabberApp:
                 elif _cmd[0] == 'add':
                     _, _u, _t, _th, _st = _cmd
                     self._add_task(_u, _t, _th, _st)
+                elif _cmd[0] == 'embed':
+                    self._embed_edge_now(_cmd[1])
         except queue.Empty:
             pass
         try:
