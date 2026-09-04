@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v15'
+APP_VERSION = 'v16'
 import os
 import re
 import sys
@@ -55,7 +55,7 @@ def save_config(cfg):
 class GrabberApp:
     def __init__(self, root):
         self.root = root
-        self.root.title('通用网页图片/视频抓取工具 v15')
+        self.root.title('通用网页图片/视频抓取工具 %s' % APP_VERSION)
         self.root.geometry('920x780')
         self.root.minsize(840, 700)
 
@@ -138,7 +138,7 @@ class GrabberApp:
         outer.pack(fill='both', expand=True)
 
         # 顶部标题
-        ttk.Label(outer, text='通用网页图片/视频抓取工具 v15',
+        ttk.Label(outer, text='通用网页图片/视频抓取工具 %s' % APP_VERSION,
                   font=('Microsoft YaHei UI', 12, 'bold')).pack(anchor='w', pady=(0, 10))
 
         # 主内容区（单页：配置 + 表格 + 日志全部在一页）
@@ -613,7 +613,8 @@ class GrabberApp:
             try:
                 _r = core.grab_single_page(url, save_dir, cookie=self.cookie, proxy=proxy,
                                            grab_img=grab_img, grab_vid=grab_vid, log=log,
-                                           progress_cb=cb, stop_event=self.stop_flag)
+                                           progress_cb=cb, stop_event=self.stop_flag,
+                                           title_cb=lambda t: self._update_task(url, title=t))
                 if len(_r) >= 4:
                     _n, _v, _t, _fi = _r[:4]
                 else:
@@ -641,7 +642,8 @@ class GrabberApp:
             try:
                 _r = core.grab_thread_page(url, save_dir, cookie=self.cookie, proxy=proxy,
                                            grab_img=grab_img, grab_vid=grab_vid, log=log,
-                                           progress_cb=cb, stop_event=self.stop_flag)
+                                           progress_cb=cb, stop_event=self.stop_flag,
+                                           title_cb=lambda t: self._update_task(url, title=t))
                 if len(_r) >= 4:
                     _n, _v, _t, _fi = _r[:4]
                 else:
@@ -683,7 +685,8 @@ class GrabberApp:
             try:
                 _r = core.grab_single_page(url, save_dir, cookie=self.cookie, proxy=proxy,
                                            grab_img=grab_img, grab_vid=grab_vid, log=log,
-                                           progress_cb=cb, stop_event=self.stop_flag)
+                                           progress_cb=cb, stop_event=self.stop_flag,
+                                           title_cb=lambda t: self._update_task(url, title=t))
                 if len(_r) >= 4:
                     _n, _v, _t, _fi = _r[:4]
                 else:
@@ -720,7 +723,8 @@ class GrabberApp:
             try:
                 _r = core.grab_thread(u, t, save_dir, cookie=self.cookie, proxy=proxy,
                                  grab_img=grab_img, grab_vid=grab_vid, log=log,
-                                 progress_cb=cb, stop_event=self.stop_flag)
+                                 progress_cb=cb, stop_event=self.stop_flag,
+                                 title_cb=lambda tt: self._update_task(u, title=tt))
                 _rt = _r[2] if len(_r) >= 3 else t
                 self._update_task(u, status='完成', title=_rt)
             except core.GrabError as e:

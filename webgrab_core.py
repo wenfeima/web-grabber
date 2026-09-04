@@ -56,13 +56,26 @@ class Fetcher:
             return self._get_opener().open(req, timeout=timeout)
         return urllib.request.urlopen(req, timeout=timeout, context=SSL_CTX)
 
+    @staticmethod
+    def _safe_url(url):
+        """URL 含非 ASCII 字符时做百分号编码，避免 urllib 报 ascii codec 错误"""
+        try:
+            url.encode('ascii')
+            return url
+        except UnicodeEncodeError:
+            pass
+        parts = urllib.parse.urlsplit(url)
+        path = urllib.parse.quote(parts.path, safe="/%:@&=+$,;~*'()!-._~")
+        query = urllib.parse.quote(parts.query, safe="=&%/?+$,;~*'()!-._:@")
+        return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, query, parts.fragment))
+
     def fetch(self, url, timeout=20, referer=None):
         headers = dict(BROWSER_HEADERS)
         if self.cookie:
             headers['Cookie'] = self.cookie
         if referer:
             headers['Referer'] = referer
-        req = urllib.request.Request(url, headers=headers)
+        req = urllib.request.Request(self._safe_url(url), headers=headers)
         resp = self._open(req, timeout)
         data = resp.read()
         charset = resp.headers.get_content_charset() or 'utf-8'
@@ -90,7 +103,7 @@ class Fetcher:
             h = dict(headers)
             if size > 0:
                 h['Range'] = 'bytes=%d-' % size
-            req = urllib.request.Request(url, headers=h)
+            req = urllib.request.Request(self._safe_url(url), headers=h)
             try:
                 resp = self._open(req, timeout)
                 # 服务器可能忽略 Range 返回 200 全量
@@ -142,9 +155,9 @@ def clean_title(t):
     t = _html.unescape(t or '')
     t = re.sub(r'<[^>]+>', '', t)
     t = t.replace('&amp;', '&').replace('&nbsp;', ' ').replace('&quot;', '"')
+    # 过滤字体图标等私有区字符（如 &#xe68b;）
+    t = re.sub(r'[\ue000-\uf8ff]', '', t)
     return re.sub(r'[\\/:*?"<>|\r\n\t ]+', '_', t).strip('_')[:80] or 'untitled'
-
-
 def _is_noise_title(t):
     """过滤掉数字/时间/图标/JS代码等噪声标题"""
     if re.fullmatch(r'\d+', t):
@@ -187,15 +200,18 @@ def extract_threads(html, base_url):
                       re.S | re.I)
     pat = re.compile(r'href="([^"]*?thread-(\d+)-1-1\.html)"[^>]*>(.*?)</a>'
                      r'|href="([^"]*?/(?:[a-zA-Z0-9_\-]+/)*\d+\.html)"[^>]*>(.*?)</a>'
-                     r'|href="([^"]*?/(?:[a-zA-Z0-9_\-]+/)+\d+)"[^>]*>(.*?)</a>',
+                     r'|href="([^"]*?/(?:[a-zA-Z0-9_\-]+/)+\d+)"[^>]*>(.*?)</a>'
+                     r'|href="([^"]*?/[A-Za-z0-9]{4,10}\.html)"[^>]*>(.*?)</a>',
                      re.S | re.I)
     for m in pat.finditer(html):
         if m.group(2):  # Discuz 模式
             href, tid, t = m.group(1), m.group(2), m.group(3)
         elif m.group(4):  # 通用 .html 模式
             href, tid, t = m.group(4), None, m.group(5)
-        else:             # 无后缀数字 id 模式
+        elif m.group(6):  # 无后缀数字 id 模式
             href, tid, t = m.group(6), None, m.group(7)
+        else:             # 根目录字母数字短 id .html 模式
+            href, tid, t = m.group(8), None, m.group(9)
         # 标题：优先链接文本；为空(如图片链接)时回退用图片 alt
         title_src = t
         if not re.sub(r'<[^>]+>', '', title_src or '').strip():
@@ -223,6 +239,9 @@ def extract_threads(html, base_url):
             thumb = urllib.parse.urljoin(url, thumb)
         # 排除 /list/分类/N 这类分类导航链接（cosplay8 等站点）
         if re.search(r'/list/[a-zA-Z0-9_\-]+/[0-9]+$', url):
+            continue
+        # 排除 /page/N、/index/N 等分页链接（无 .html 后缀的纯数字路径，如 aethercms 的 /page/2）
+        if re.search(r'/(?:page|index|list|cat|tag|category|category-)/[0-9]+/?$', url, re.I):
             continue
         # 排除 /coser/N 作者主页链接（次元岛等站点，非图集）
         if re.search(r'/coser/[a-zA-Z0-9_\-]+/[0-9]+$', url) or re.search(r'/coser/[0-9]+$', url):
@@ -261,7 +280,12 @@ def _ext(u):
 
 
 def _is_img_url(u):
-    return _ext(u) in IMG_EXTS or '/attach' in u.lower() or 'att.' in u.lower()
+    if _ext(u) in IMG_EXTS or '/attach' in u.lower() or 'att.' in u.lower():
+        return True
+    # 兼容 .jpg!p330 这类"扩展名+!处理后缀"的 URL（cosplay8 等）
+    if re.search(r'\.(?:jpg|jpeg|png|webp|bmp|avif)![a-zA-Z0-9_]+$', u, re.I):
+        return True
+    return False
 
 
 def _is_vid_url(u):
@@ -323,8 +347,26 @@ def extract_media(html, base_url):
     # 过滤模板/头像噪音
     noise_pat = re.compile(r'(template/|static/image|data/avatar|avatar|logo|smiley|'
                            r'\.gif|\.ico|/images/|icon|bg_|top_|qq_login|pn_|print|userinfo|'
-                           r'thread-prev|thread-next|fav|share|report|thumb|/user/)', re.I)
+                           r'thread-prev|thread-next|fav|share|report|thumb|/user/|'
+                           r'未命名|unnamed|cropped-|default|placeholder|spacer)', re.I)
     imgs = {u for u in imgs if not noise_pat.search(u)}
+    # 过滤 WordPress 小尺寸缩略图后缀 -WxH.ext（如 -180x180.png、-32x32.png），
+    # 只保留同一基础文件名下尺寸最大的一张。
+    _wp_best = {}
+    for u in imgs:
+        _m = re.search(r'-(\d{2,4})x\d{2,4}(\.(?:jpg|jpeg|png|webp))$', u, re.I)
+        if _m:
+            _w = int(_m.group(1))
+            _base = u[:_m.start()]
+            if _w < 300:
+                continue  # 小缩略图直接丢弃
+            if _base not in _wp_best or _w > _wp_best[_base][0]:
+                _wp_best[_base] = (_w, u)
+    if _wp_best:
+        _wp_keep = {v[1] for v in _wp_best.values()}
+        imgs = {u for u in imgs
+                if not re.search(r'-\d{2,4}x\d{2,4}\.(?:jpg|jpeg|png|webp)$', u, re.I)
+                or u in _wp_keep}
 
     # 尺寸去重：URL 带 w_xxx 尺寸参数的，保留同一路径下宽度最大的版本，
     # 丢弃明显的小缩略图（宽度 < 300）。
@@ -465,7 +507,7 @@ def grab_list(url, cookie='', proxy='', max_threads=0, page_limit=1, log=None, a
     return result
 
 
-def grab_single_page(url, save_dir, cookie='', proxy='', grab_img=True, grab_vid=True, log=None, folder_name=None, progress_cb=None, stop_event=None):
+def grab_single_page(url, save_dir, cookie='', proxy='', grab_img=True, grab_vid=True, log=None, folder_name=None, progress_cb=None, stop_event=None, title_cb=None):
     """抓取单个网页/图站的图片视频，存到一个文件夹（默认以页面标题命名，也可自定义 folder_name）"""
     def lg(msg):
         if log:
@@ -487,6 +529,8 @@ def grab_single_page(url, save_dir, cookie='', proxy='', grab_img=True, grab_vid
     folder = os.path.join(save_dir, sanitize_filename(title))
     os.makedirs(folder, exist_ok=True)
     lg('  文件夹名: %s' % title)
+    if title_cb:
+        title_cb(title)
 
     imgs, vids = extract_media(html, url)
     first_img = imgs[0] if imgs else ''
@@ -496,6 +540,8 @@ def grab_single_page(url, save_dir, cookie='', proxy='', grab_img=True, grab_vid
 
     if grab_img:
         for i, u in enumerate(imgs, 1):
+            if stop_event is not None and stop_event.is_set():
+                break
             ext = os.path.splitext(urllib.parse.urlparse(u).path)[1] or '.jpg'
             fp = os.path.join(folder, 'img_%03d%s' % (i, ext))
             try:
@@ -511,6 +557,8 @@ def grab_single_page(url, save_dir, cookie='', proxy='', grab_img=True, grab_vid
 
     if grab_vid:
         for i, u in enumerate(vids, 1):
+            if stop_event is not None and stop_event.is_set():
+                break
             path = urllib.parse.urlparse(u).path
             ext = os.path.splitext(path)[1] or '.mp4'
             base = os.path.basename(path) or ('video_%03d' % i)
@@ -529,7 +577,7 @@ def grab_single_page(url, save_dir, cookie='', proxy='', grab_img=True, grab_vid
     return n_img, n_vid, title, first_img
 
 
-def grab_thread_page(url, save_dir, cookie='', proxy='', grab_img=True, grab_vid=True, log=None, folder_name=None, progress_cb=None, stop_event=None):
+def grab_thread_page(url, save_dir, cookie='', proxy='', grab_img=True, grab_vid=True, log=None, folder_name=None, progress_cb=None, stop_event=None, title_cb=None):
     """抓取单个帖子页：直接用帖子真实标题建文件夹，下载全部图片/视频"""
     def lg(msg):
         if log:
@@ -551,6 +599,8 @@ def grab_thread_page(url, save_dir, cookie='', proxy='', grab_img=True, grab_vid
     folder = os.path.join(save_dir, sanitize_filename(title))
     os.makedirs(folder, exist_ok=True)
     lg('  文件夹名: %s' % title)
+    if title_cb:
+        title_cb(title)
 
     imgs, vids = extract_media(html, url)
     first_img = imgs[0] if imgs else ''
@@ -560,6 +610,8 @@ def grab_thread_page(url, save_dir, cookie='', proxy='', grab_img=True, grab_vid
 
     if grab_img:
         for i, u in enumerate(imgs, 1):
+            if stop_event is not None and stop_event.is_set():
+                break
             ext = os.path.splitext(urllib.parse.urlparse(u).path)[1] or '.jpg'
             fp = os.path.join(folder, 'img_%03d%s' % (i, ext))
             try:
@@ -575,6 +627,8 @@ def grab_thread_page(url, save_dir, cookie='', proxy='', grab_img=True, grab_vid
 
     if grab_vid:
         for i, u in enumerate(vids, 1):
+            if stop_event is not None and stop_event.is_set():
+                break
             path = urllib.parse.urlparse(u).path
             ext = os.path.splitext(path)[1] or '.mp4'
             base = os.path.basename(path) or ('video_%03d' % i)
@@ -593,7 +647,7 @@ def grab_thread_page(url, save_dir, cookie='', proxy='', grab_img=True, grab_vid
     return n_img, n_vid, title, first_img
 
 
-def grab_thread(url, title, save_dir, cookie='', proxy='', grab_img=True, grab_vid=True, log=None, folder_name=None, progress_cb=None, stop_event=None):
+def grab_thread(url, title, save_dir, cookie='', proxy='', grab_img=True, grab_vid=True, log=None, folder_name=None, progress_cb=None, stop_event=None, title_cb=None):
     """抓取单个帖子：下载图片/视频到 save_dir/文件夹 文件夹。
     folder_name 提供时用自定义名，否则用帖子标题"""
     def lg(msg):
@@ -617,12 +671,16 @@ def grab_thread(url, title, save_dir, cookie='', proxy='', grab_img=True, grab_v
     first_img = imgs[0] if imgs else ''
     # 真实标题：详情页 <title>（用于抓完后校验更新表格）
     real_title = get_page_title(html) or title
+    if title_cb:
+        title_cb(real_title)
     total = (len(imgs) if grab_img else 0) + (len(vids) if grab_vid else 0)
     n_img = n_vid = 0
     done = 0
 
     if grab_img:
         for i, u in enumerate(imgs, 1):
+            if stop_event is not None and stop_event.is_set():
+                break
             ext = os.path.splitext(urllib.parse.urlparse(u).path)[1] or '.jpg'
             fp = os.path.join(folder, 'img_%03d%s' % (i, ext))
             try:
@@ -638,6 +696,8 @@ def grab_thread(url, title, save_dir, cookie='', proxy='', grab_img=True, grab_v
 
     if grab_vid:
         for i, u in enumerate(vids, 1):
+            if stop_event is not None and stop_event.is_set():
+                break
             path = urllib.parse.urlparse(u).path
             ext = os.path.splitext(path)[1] or '.mp4'
             base = os.path.basename(path) or ('video_%03d' % i)
@@ -1039,6 +1099,8 @@ def grab_site(url, save_dir, cookie='', proxy='', grab_img=True, grab_vid=True,
         n = 0
         if grab_img:
             for i, u in enumerate(imgs, 1):
+                if stop_event is not None and stop_event.is_set():
+                    break
                 ext = os.path.splitext(urllib.parse.urlparse(u).path)[1] or '.jpg'
                 fp = os.path.join(page_dir, 'img_%03d%s' % (i, ext))
                 try:
@@ -1049,6 +1111,8 @@ def grab_site(url, save_dir, cookie='', proxy='', grab_img=True, grab_vid=True,
                 time.sleep(0.2)
         if grab_vid:
             for i, u in enumerate(vids, 1):
+                if stop_event is not None and stop_event.is_set():
+                    break
                 path = urllib.parse.urlparse(u).path
                 ext = os.path.splitext(path)[1] or '.mp4'
                 base = os.path.basename(path) or ('video_%03d' % i)
