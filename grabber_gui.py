@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v23'
+APP_VERSION = 'v24'
 import os
 import re
 import sys
@@ -662,10 +662,25 @@ class GrabberApp:
         try:
             args = [edge, '--remote-debugging-port=9222',
                     '--remote-allow-origins=*',
-                    '--window-position=-32000,-32000',
                     '--user-data-dir=' + edge_profile.DEBUG_PROFILE_DIR]
             _proc = subprocess.Popen(args)
-            self._log('正在启动调试浏览器（Edge 9222 端口，PID=%s），就绪后自动嵌入「浏览器」页签...' % _proc.pid)
+            self._log('正在启动调试浏览器（Edge 9222 端口，PID=%s）...' % _proc.pid)
+            # 诊断：3秒后检查进程是否还活着 + 尝试访问端口
+            def _diag():
+                import time as _t
+                _t.sleep(3)
+                if _proc.poll() is not None:
+                    self._log('诊断: Edge 进程已退出（退出码=%s），启动失败' % _proc.returncode)
+                    return
+                self._log('诊断: Edge 进程仍在运行')
+                try:
+                    import urllib.request as _ur
+                    with _ur.urlopen('http://127.0.0.1:9222/json/version', timeout=3) as _r:
+                        _body = _r.read().decode('utf-8', errors='replace')[:200]
+                        self._log('诊断: 端口9222可访问，返回: %s' % _body)
+                except Exception as _e:
+                    self._log('诊断: 端口9222无法访问 - %s' % _e)
+            threading.Thread(target=_diag, daemon=True).start()
         except Exception as e:
             self._log('启动调试浏览器失败: %s' % e)
             return
@@ -678,14 +693,15 @@ class GrabberApp:
         ok = False
         for _try in range(40):
             time.sleep(0.5)
+            if _try == 19:
+                self._log('等待调试端口中...（已等10秒，Edge 启动较慢请稍候）')
             try:
                 if cdp_browser.is_connected():
                     ok = True
                     self._log('调试端口 9222 已连接（尝试 %d 次）' % (_try + 1))
                     break
-            except Exception as _e:
-                if _try == 19:
-                    self._log('等待调试端口中...（已等10秒，Edge 启动较慢请稍候）')
+            except Exception:
+                pass
         if not ok:
             self._log('错误: 20秒内未连上 Edge 调试端口 9222')
             self._log('可能原因: Edge 启动失败 / 端口被占用 / 调试参数未生效')
