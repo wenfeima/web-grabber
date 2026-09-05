@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v26'
+APP_VERSION = 'v27'
 import os
 import re
 import sys
@@ -618,31 +618,25 @@ class GrabberApp:
             self._log('正在关闭所有 Edge 进程...')
             try:
                 import subprocess as _sp
-                _sp.run(['taskkill', '/F', '/IM', 'msedge.exe'],
-                        capture_output=True, text=True, timeout=10)
-            except Exception:
-                pass
-            # 循环确认 Edge 真的全死了，最多等5秒
-            import time as _time
-            for _wait in range(10):
-                _time.sleep(0.5)
-                try:
-                    _r = _sp.run(['tasklist', '/FI', 'IMAGENAME eq msedge.exe'],
-                                  capture_output=True, text=True, timeout=5)
-                    if 'msedge.exe' not in _r.stdout:
+                # 杀两次，确保子进程也死干净
+                for _k in range(2):
+                    _sp.run(['taskkill', '/F', '/IM', 'msedge.exe'],
+                            capture_output=True, text=True, timeout=10)
+                    import time as _time
+                    _time.sleep(1)
+                # 循环确认所有 msedge.exe 真的死了，最多等10秒
+                for _wait in range(20):
+                    _time.sleep(0.5)
+                    try:
+                        _r = _sp.run(['tasklist', '/FI', 'IMAGENAME eq msedge.exe'],
+                                      capture_output=True, text=True, timeout=5)
+                        if 'msedge.exe' not in _r.stdout:
+                            self._log('所有 Edge 进程已关闭')
+                            break
+                    except Exception:
                         break
-                except Exception:
-                    break
-            # 检查 9222 端口是否还被占用，如果是就杀掉对应进程
-            try:
-                _r = _sp.run(['netstat', '-ano'], capture_output=True, text=True, timeout=5)
-                for _line in _r.stdout.splitlines():
-                    if ':9222' in _line and 'LISTENING' in _line:
-                        _pid = _line.strip().split()[-1]
-                        self._log('9222 端口被 PID=%s 占用，正在释放...' % _pid)
-                        _sp.run(['taskkill', '/F', '/PID', _pid],
-                                capture_output=True, text=True, timeout=5)
-                        _time.sleep(1)
+                else:
+                    self._log('警告: 仍有 Edge 进程残留，可能导致启动失败')
             except Exception:
                 pass
         self._launch_debug_edge(edge)
@@ -670,65 +664,61 @@ class GrabberApp:
                     os.remove(_fp)
             except Exception:
                 pass
-        # 诊断：打印 profile 状态
-        self._log('诊断: profile目录=%s' % profile_dir)
-        self._log('诊断: profile存在=%s, LocalState存在=%s' % (
-            os.path.isdir(profile_dir),
-            os.path.isfile(os.path.join(profile_dir, 'Local State'))))
         args = [edge, '--remote-debugging-port=9222',
                 '--remote-allow-origins=*',
                 '--no-first-run',
                 '--no-default-browser-check',
                 '--user-data-dir=' + profile_dir]
         self._log('诊断: 启动命令=%s' % ' '.join(args))
+        # 用 cmd /c start 方式启动（绕过 subprocess 环境继承问题）
         try:
-            _proc = subprocess.Popen(args)
-            self._log('正在启动调试浏览器（Edge 9222 端口，PID=%s）...' % _proc.pid)
+            import subprocess as _sp
+            cmd = 'start "" "%s" %s' % (edge, ' '.join('"%s"' % a if ' ' in a else a for a in args[1:]))
+            self._log('诊断: 通过 cmd start 启动: %s' % cmd)
+            _sp.run(['cmd', '/c', cmd], cwd=os.path.dirname(edge), timeout=10)
+            self._log('正在启动调试浏览器（Edge 9222 端口）...')
         except Exception as e:
-            self._log('启动调试浏览器失败: %s' % e)
-            return
-        # 深度诊断：3秒/6秒/10秒分别检查进程状态
-        def _diag():
+            self._log('cmd start 启动失败，回退 Popen: %s' % e)
+            try:
+                _proc = subprocess.Popen(args, cwd=os.path.dirname(edge))
+                self._log('正在启动调试浏览器（Edge 9222 端口，PID=%s）...' % _proc.pid)
+            except Exception as e2:
+                self._log('启动调试浏览器失败: %s' % e2)
+                return
+        # 启动后立即检查：0.5秒/1秒/2秒/5秒
+        def _check():
             import time as _t
-            for _sec in (3, 6, 10):
-                _t.sleep(_sec - (0 if _sec == 3 else 3))
-                if _proc.poll() is not None:
-                    self._log('诊断: %d秒时Edge已退出（退出码=%s）' % (_sec, _proc.returncode))
-                    # 退出后尝试用临时空profile启动一次，验证是不是profile的问题
-                    if _sec == 3:
-                        import tempfile
-                        tmp_dir = os.path.join(tempfile.gettempdir(), 'wg_edge_test')
-                        try:
-                            import shutil
-                            if os.path.exists(tmp_dir):
-                                shutil.rmtree(tmp_dir, ignore_errors=True)
-                            os.makedirs(tmp_dir, exist_ok=True)
-                        except Exception:
-                            pass
-                        tmp_args = [edge, '--remote-debugging-port=9223',
-                                    '--remote-allow-origins=*',
-                                    '--no-first-run', '--no-default-browser-check',
-                                    '--user-data-dir=' + tmp_dir]
-                        self._log('诊断: 用临时空profile测试启动(端口9223)...')
-                        try:
-                            _tmp = subprocess.Popen(tmp_args)
-                            _t.sleep(4)
-                            if _tmp.poll() is None:
-                                self._log('诊断: 临时空profile启动成功！说明是复制的profile有问题')
-                                self._log('诊断: 建议删除 %s 后重新复制' % profile_dir)
-                                try:
-                                    _tmp.terminate()
-                                except Exception:
-                                    pass
-                            else:
-                                self._log('诊断: 临时空profile也退出了（退出码=%s），是Edge本身或参数的问题' % _tmp.returncode)
-                        except Exception as _e:
-                            self._log('诊断: 临时profile测试失败: %s' % _e)
-                    return
+            for _sec in (0.5, 1, 2, 5, 10):
+                _t.sleep(_sec if _sec == 0.5 else _sec - (0.5 if _sec == 1 else (1 if _sec == 2 else (2 if _sec == 5 else 5))))
+                try:
+                    _r = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq msedge.exe'],
+                                        capture_output=True, text=True, timeout=5)
+                    _count = _r.stdout.count('msedge.exe')
+                    self._log('诊断: %.1f秒时 msedge.exe 进程数=%d' % (_sec, _count))
+                    if _count > 0:
+                        if _sec >= 5:
+                            self._log('诊断: Edge 持续运行，启动正常')
+                            return
+                except Exception:
+                    pass
+            self._log('诊断: 10秒内无 msedge.exe 进程，启动失败')
+            # 尝试用最简单的参数启动（不加调试端口）
+            self._log('诊断: 尝试不加调试端口启动，验证Edge本身是否正常...')
+            try:
+                simple_args = [edge, '--no-first-run', '--no-default-browser-check',
+                               '--user-data-dir=' + profile_dir]
+                subprocess.Popen(simple_args, cwd=os.path.dirname(edge))
+                import time as _t
+                _t.sleep(3)
+                _r = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq msedge.exe'],
+                                    capture_output=True, text=True, timeout=5)
+                if 'msedge.exe' in _r.stdout:
+                    self._log('诊断: 不加调试端口能启动！说明是 --remote-debugging-port 参数被限制（可能是组策略）')
                 else:
-                    self._log('诊断: %d秒时Edge仍在运行' % _sec)
-            self._log('诊断: Edge持续运行10秒以上，启动正常')
-        threading.Thread(target=_diag, daemon=True).start()
+                    self._log('诊断: 不加调试端口也启动失败，是Edge本身的问题')
+            except Exception as _e:
+                self._log('诊断: 简单启动测试失败: %s' % _e)
+        threading.Thread(target=_check, daemon=True).start()
         threading.Thread(target=self._wait_edge_ready, daemon=True).start()
 
     def _wait_edge_ready(self):
