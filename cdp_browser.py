@@ -134,6 +134,12 @@ def grab_page(url, wait_sec=5, scroll_times=0, max_images=0, timeout=60, log=Non
 """
         r = _send(ws, 'Runtime.evaluate', {'expression': expr, 'returnByValue': True})
         arr = r.get('result', {}).get('result', {}).get('value', []) or []
+        # 获取页面标题
+        try:
+            r_title = _send(ws, 'Runtime.evaluate', {'expression': 'document.title', 'returnByValue': True})
+            page_title = r_title.get('result', {}).get('result', {}).get('value', '') or ''
+        except Exception:
+            page_title = ''
         images = []
         videos = []
         for u in arr:
@@ -149,7 +155,7 @@ def grab_page(url, wait_sec=5, scroll_times=0, max_images=0, timeout=60, log=Non
         if max_images > 0:
             images = images[:max_images]
         lg('浏览器抓到图片 %d 张、视频 %d 个' % (len(images), len(videos)))
-        return images, videos
+        return images, videos, page_title
     finally:
         if ws:
             try:
@@ -222,28 +228,36 @@ def grab_list_page(url, wait_sec=5, scroll_times=3, max_posts=30, timeout=60, lo
 
     if not post_links:
         lg('未识别到帖子链接，回退为单页抓取')
-        return grab_page(url, wait_sec=wait_sec, scroll_times=scroll_times, timeout=timeout, log=log)
+        imgs, vids, ptitle = grab_page(url, wait_sec=wait_sec, scroll_times=scroll_times, timeout=timeout, log=log)
+        return [{'title': ptitle, 'url': url, 'images': imgs, 'videos': vids}]
 
     # 第二步：逐个进入帖子抓原图
-    all_images = []
-    all_videos = []
+    posts = []
     seen = set()
     for idx, post_url in enumerate(post_links):
         lg('[%d/%d] 正在抓取: %s' % (idx + 1, len(post_links), post_url))
         try:
-            imgs, vids = grab_page(post_url, wait_sec=wait_sec, scroll_times=1, timeout=timeout, log=None)
+            imgs, vids, ptitle = grab_page(post_url, wait_sec=wait_sec, scroll_times=1, timeout=timeout, log=None)
+            # 去重
+            unique_imgs = []
             for u in imgs:
                 if u not in seen:
                     seen.add(u)
-                    all_images.append(u)
+                    unique_imgs.append(u)
+            unique_vids = []
             for u in vids:
                 if u not in seen:
                     seen.add(u)
-                    all_videos.append(u)
+                    unique_vids.append(u)
+            posts.append({'title': ptitle, 'url': post_url, 'images': unique_imgs, 'videos': unique_vids})
         except Exception as e:
             lg('  抓取失败: %s' % str(e)[:80])
+            posts.append({'title': '', 'url': post_url, 'images': [], 'videos': []})
         if (idx + 1) % 5 == 0:
-            lg('进度: %d/%d，已收集图片 %d 张' % (idx + 1, len(post_links), len(all_images)))
+            total_imgs = sum(len(p['images']) for p in posts)
+            lg('进度: %d/%d，已收集图片 %d 张' % (idx + 1, len(post_links), total_imgs))
 
-    lg('列表页抓取完成：%d 个帖子，共图片 %d 张、视频 %d 个' % (len(post_links), len(all_images), len(all_videos)))
-    return all_images, all_videos
+    total_imgs = sum(len(p['images']) for p in posts)
+    total_vids = sum(len(p['videos']) for p in posts)
+    lg('列表页抓取完成：%d 个帖子，共图片 %d 张、视频 %d 个' % (len(posts), total_imgs, total_vids))
+    return posts

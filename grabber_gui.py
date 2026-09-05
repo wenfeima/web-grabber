@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v2.0.3'
+APP_VERSION = 'v2.0.4'
 import os
 import re
 import sys
@@ -841,38 +841,50 @@ class GrabberApp:
                     self._update_task(url, status='失败')
                     log('========== 抓取完成 ==========')
                     return
-                images, videos = cdp_browser.grab_list_page(url, wait_sec=6, scroll_times=3,
+                posts = cdp_browser.grab_list_page(url, wait_sec=6, scroll_times=3,
                                                              max_posts=30, log=log, timeout=60)
-                title = 'browser_' + str(int(time.time()))
-                folder = os.path.join(save_dir, core.sanitize_filename(title))
-                os.makedirs(folder, exist_ok=True)
                 self.stats_imgs = 0
                 self.stats_vids = 0
                 _fetcher = core.Fetcher(self.cookie, proxy, self.stop_flag)
                 from concurrent.futures import ThreadPoolExecutor
-                n = 0
-                dl_list = []
-                if grab_img:
-                    dl_list += [('img', u) for u in images]
-                if grab_vid:
-                    dl_list += [('vid', u) for u in videos]
-                def dl_one(item):
-                    import urllib.parse
-                    kind, u = item
-                    if self.stop_flag.is_set():
-                        return 0
-                    ext = os.path.splitext(urllib.parse.urlparse(u).path)[1] or ('.jpg' if kind == 'img' else '.mp4')
-                    try:
-                        _fetcher.download(u, os.path.join(folder, kind + '_%s%s' % (abs(hash(u)) % 1000000, ext)),
-                                          referer=url, timeout=30)
-                        return 1
-                    except Exception:
-                        return 0
-                if dl_list:
-                    with ThreadPoolExecutor(max_workers=max(1, threads)) as ex:
-                        n = sum(ex.map(dl_one, dl_list))
-                self._update_task(url, progress=(n, len(dl_list)), status='完成')
-                log('浏览器模式下载完成: %d 个文件' % n)
+                # 每个帖子一个文件夹，按帖子标题分类
+                total_downloaded = 0
+                total_files = 0
+                for pidx, post in enumerate(posts):
+                    ptitle = post.get('title', '') or ('post_%d' % (pidx + 1))
+                    # 清理标题，去掉网站名后缀
+                    ptitle = ptitle.split('-')[0].split('_')[0].split('|')[0].strip()
+                    if not ptitle:
+                        ptitle = 'post_%d' % (pidx + 1)
+                    folder = os.path.join(save_dir, core.sanitize_filename(ptitle))
+                    os.makedirs(folder, exist_ok=True)
+                    dl_list = []
+                    if grab_img:
+                        dl_list += [('img', u) for u in post.get('images', [])]
+                    if grab_vid:
+                        dl_list += [('vid', u) for u in post.get('videos', [])]
+                    if not dl_list:
+                        continue
+                    log('[%d/%d] 下载帖子: %s (%d 个文件)' % (pidx + 1, len(posts), ptitle[:40], len(dl_list)))
+                    def dl_one(item):
+                        import urllib.parse
+                        kind, u = item
+                        if self.stop_flag.is_set():
+                            return 0
+                        ext = os.path.splitext(urllib.parse.urlparse(u).path)[1] or ('.jpg' if kind == 'img' else '.mp4')
+                        try:
+                            _fetcher.download(u, os.path.join(folder, kind + '_%s%s' % (abs(hash(u)) % 1000000, ext)),
+                                              referer=post.get('url', url), timeout=30)
+                            return 1
+                        except Exception:
+                            return 0
+                    if dl_list:
+                        with ThreadPoolExecutor(max_workers=max(1, threads)) as ex:
+                            n = sum(ex.map(dl_one, dl_list))
+                        total_downloaded += n
+                        total_files += len(dl_list)
+                self._update_task(url, progress=(total_downloaded, total_files), status='完成')
+                log('浏览器模式下载完成: %d 个文件' % total_downloaded)
                 self._update_task(url, status='完成')
             except Exception as e:
                 log('浏览器模式失败: %s' % e)
