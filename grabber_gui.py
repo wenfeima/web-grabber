@@ -285,7 +285,7 @@ class GrabberApp:
         # ---- 第6行：主内容区分页：任务列表 / 运行日志 ----
         self.nb = ttk.Notebook(frm)
         nb = self.nb
-        nb.grid(row=8, column=0, columnspan=6, sticky='nsew', padx=5, pady=4)
+        nb.grid(row=9, column=0, columnspan=6, sticky='nsew', padx=5, pady=4)
         frm.rowconfigure(8, weight=1)
 
         # --- 页1：任务列表（表格 + 统计栏） ---
