@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v2.0.5'
+APP_VERSION = 'v2.0.7'
 import os
 import re
 import sys
@@ -620,9 +620,38 @@ class GrabberApp:
         args = [chrome, '--no-first-run', '--no-default-browser-check',
                 '--disable-session-crashed-bubble',
                 '--user-data-dir=' + profile_dir]
+        # 临时禁用 Chrome++ 等修改版的 version.dll 注入
+        chrome_dir = os.path.dirname(chrome)
+        version_dll = os.path.join(chrome_dir, 'version.dll')
+        version_dll_bak = version_dll + '.webgrabber_bak'
+        renamed = False
+        if os.path.exists(version_dll):
+            try:
+                os.rename(version_dll, version_dll_bak)
+                renamed = True
+            except Exception:
+                pass
         try:
-            subprocess.Popen(args, cwd=os.path.dirname(chrome))
-            self._log('已独立窗口打开浏览器（同一个调试profile）')
+            _proc = subprocess.Popen(args, cwd=chrome_dir)
+            self._log('已独立窗口打开浏览器（同一个调试profile，PID=%s）' % _proc.pid)
+            # 等3秒后恢复 version.dll
+            if renamed:
+                def _restore():
+                    import time as _t
+                    _t.sleep(3)
+                    try:
+                        if os.path.exists(version_dll_bak):
+                            os.rename(version_dll_bak, version_dll)
+                    except Exception:
+                        pass
+                threading.Thread(target=_restore, daemon=True).start()
+        except Exception as e:
+            self._log('独立窗口打开失败: %s' % e)
+            if renamed and os.path.exists(version_dll_bak):
+                try:
+                    os.rename(version_dll_bak, version_dll)
+                except Exception:
+                    pass
             self._log('请在这个窗口里登录账号、装好需要的插件，完成后关闭窗口')
             self._log('然后再点「启动调试浏览器」，登录态和插件就会在内嵌浏览器里生效')
         except Exception as e:
@@ -721,12 +750,34 @@ class GrabberApp:
                 '--no-default-browser-check',
                 '--disable-session-crashed-bubble',
                 '--user-data-dir=' + profile_dir]
+        # 临时禁用 Chrome++ 等修改版的 version.dll 注入（否则命令行启动会立即退出）
+        chrome_dir = os.path.dirname(chrome)
+        version_dll = os.path.join(chrome_dir, 'version.dll')
+        version_dll_bak = version_dll + '.webgrabber_bak'
+        renamed = False
+        if os.path.exists(version_dll):
+            try:
+                os.rename(version_dll, version_dll_bak)
+                renamed = True
+                self._log('已临时禁用浏览器修改版注入（version.dll）')
+            except Exception:
+                pass
         try:
-            _proc = subprocess.Popen(args, cwd=os.path.dirname(chrome))
+            _proc = subprocess.Popen(args, cwd=chrome_dir)
             self._log('正在启动调试浏览器（9222 端口，PID=%s）...' % _proc.pid)
         except Exception as e:
             self._log('启动调试浏览器失败: %s' % e)
+            # 启动失败，立即恢复 version.dll
+            if renamed and os.path.exists(version_dll_bak):
+                try:
+                    os.rename(version_dll_bak, version_dll)
+                except Exception:
+                    pass
             return
+        # 保存 renamed 状态，等 _wait_edge_ready 里恢复
+        self._version_dll_renamed = renamed
+        self._version_dll_path = version_dll
+        self._version_dll_bak_path = version_dll_bak
         threading.Thread(target=self._wait_edge_ready, daemon=True).start()
 
     def _wait_edge_ready(self):
