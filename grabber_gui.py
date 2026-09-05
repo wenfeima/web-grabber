@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v22'
+APP_VERSION = 'v23'
 import os
 import re
 import sys
@@ -622,8 +622,29 @@ class GrabberApp:
                         capture_output=True, text=True, timeout=10)
             except Exception:
                 pass
+            # 循环确认 Edge 真的全死了，最多等5秒
             import time as _time
-            _time.sleep(2)
+            for _wait in range(10):
+                _time.sleep(0.5)
+                try:
+                    _r = _sp.run(['tasklist', '/FI', 'IMAGENAME eq msedge.exe'],
+                                  capture_output=True, text=True, timeout=5)
+                    if 'msedge.exe' not in _r.stdout:
+                        break
+                except Exception:
+                    break
+            # 检查 9222 端口是否还被占用，如果是就杀掉对应进程
+            try:
+                _r = _sp.run(['netstat', '-ano'], capture_output=True, text=True, timeout=5)
+                for _line in _r.stdout.splitlines():
+                    if ':9222' in _line and 'LISTENING' in _line:
+                        _pid = _line.strip().split()[-1]
+                        self._log('9222 端口被 PID=%s 占用，正在释放...' % _pid)
+                        _sp.run(['taskkill', '/F', '/PID', _pid],
+                                capture_output=True, text=True, timeout=5)
+                        _time.sleep(1)
+            except Exception:
+                pass
         self._launch_debug_edge(edge)
 
     def _first_time_edge_setup(self, edge):
@@ -643,8 +664,8 @@ class GrabberApp:
                     '--remote-allow-origins=*',
                     '--window-position=-32000,-32000',
                     '--user-data-dir=' + edge_profile.DEBUG_PROFILE_DIR]
-            subprocess.Popen(args)
-            self._log('正在启动调试浏览器（Edge 9222 端口），就绪后自动嵌入「浏览器」页签...')
+            _proc = subprocess.Popen(args)
+            self._log('正在启动调试浏览器（Edge 9222 端口，PID=%s），就绪后自动嵌入「浏览器」页签...' % _proc.pid)
         except Exception as e:
             self._log('启动调试浏览器失败: %s' % e)
             return
@@ -655,16 +676,20 @@ class GrabberApp:
         import cdp_browser
         import embed_edge
         ok = False
-        for _ in range(24):
+        for _try in range(40):
             time.sleep(0.5)
             try:
                 if cdp_browser.is_connected():
                     ok = True
+                    self._log('调试端口 9222 已连接（尝试 %d 次）' % (_try + 1))
                     break
-            except Exception:
-                pass
+            except Exception as _e:
+                if _try == 19:
+                    self._log('等待调试端口中...（已等10秒，Edge 启动较慢请稍候）')
         if not ok:
-            self._log('提示: 若 Edge 已在运行而未开调试端口，请先完全退出 Edge，再点「启动调试浏览器」')
+            self._log('错误: 20秒内未连上 Edge 调试端口 9222')
+            self._log('可能原因: Edge 启动失败 / 端口被占用 / 调试参数未生效')
+            self._log('请点「关闭所有Edge」后再试，或手动用命令行启动: msedge.exe --remote-debugging-port=9222')
             return
         hwnd = embed_edge.find_edge_window(timeout=15)
         if hwnd:
