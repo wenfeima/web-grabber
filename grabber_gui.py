@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v21'
+APP_VERSION = 'v22'
 import os
 import re
 import sys
@@ -606,6 +606,24 @@ class GrabberApp:
                 return
             threading.Thread(target=self._first_time_edge_setup, args=(edge,), daemon=True).start()
             return
+        # 启动前检测：如果 Edge 正在运行，提示用户保存工作后自动关闭
+        import edge_profile
+        if edge_profile.is_edge_running():
+            if not messagebox.askyesno(
+                    '需要关闭 Edge',
+                    '检测到 Edge 正在运行，启动调试浏览器需要先关闭所有 Edge 窗口。\n'
+                    '请先保存好你正在浏览的内容，关闭后会自动启动调试模式的 Edge。\n\n是否继续？'):
+                self._log('已取消启动调试浏览器')
+                return
+            self._log('正在关闭所有 Edge 进程...')
+            try:
+                import subprocess as _sp
+                _sp.run(['taskkill', '/F', '/IM', 'msedge.exe'],
+                        capture_output=True, text=True, timeout=10)
+            except Exception:
+                pass
+            import time as _time
+            _time.sleep(2)
         self._launch_debug_edge(edge)
 
     def _first_time_edge_setup(self, edge):
