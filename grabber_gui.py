@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v25'
+APP_VERSION = 'v26'
 import os
 import re
 import sys
@@ -659,44 +659,76 @@ class GrabberApp:
     def _launch_debug_edge(self, edge):
         """启动调试 Edge（独立调试 profile，端口必开）"""
         import edge_profile
-        # 启动前清理 profile 锁文件（Edge 异常退出后残留会导致新实例直接退出）
+        profile_dir = edge_profile.DEBUG_PROFILE_DIR
+        # 启动前清理 profile 锁文件
         lock_files = ['SingletonLock', 'SingletonCookie', 'SingletonSocket',
                       'lockfile', 'Lockfile']
         for _lf in lock_files:
             try:
-                _fp = os.path.join(edge_profile.DEBUG_PROFILE_DIR, _lf)
+                _fp = os.path.join(profile_dir, _lf)
                 if os.path.exists(_fp):
                     os.remove(_fp)
             except Exception:
                 pass
+        # 诊断：打印 profile 状态
+        self._log('诊断: profile目录=%s' % profile_dir)
+        self._log('诊断: profile存在=%s, LocalState存在=%s' % (
+            os.path.isdir(profile_dir),
+            os.path.isfile(os.path.join(profile_dir, 'Local State'))))
+        args = [edge, '--remote-debugging-port=9222',
+                '--remote-allow-origins=*',
+                '--no-first-run',
+                '--no-default-browser-check',
+                '--user-data-dir=' + profile_dir]
+        self._log('诊断: 启动命令=%s' % ' '.join(args))
         try:
-            args = [edge, '--remote-debugging-port=9222',
-                    '--remote-allow-origins=*',
-                    '--no-first-run',
-                    '--no-default-browser-check',
-                    '--new-window',
-                    '--user-data-dir=' + edge_profile.DEBUG_PROFILE_DIR]
             _proc = subprocess.Popen(args)
             self._log('正在启动调试浏览器（Edge 9222 端口，PID=%s）...' % _proc.pid)
-            # 诊断：3秒后检查进程是否还活着 + 尝试访问端口
-            def _diag():
-                import time as _t
-                _t.sleep(3)
-                if _proc.poll() is not None:
-                    self._log('诊断: Edge 进程已退出（退出码=%s）' % _proc.returncode)
-                    return
-                self._log('诊断: Edge 进程仍在运行')
-                try:
-                    import urllib.request as _ur
-                    with _ur.urlopen('http://127.0.0.1:9222/json/version', timeout=3) as _r:
-                        _body = _r.read().decode('utf-8', errors='replace')[:200]
-                        self._log('诊断: 端口9222可访问，返回: %s' % _body)
-                except Exception as _e:
-                    self._log('诊断: 端口9222无法访问 - %s' % _e)
-            threading.Thread(target=_diag, daemon=True).start()
         except Exception as e:
             self._log('启动调试浏览器失败: %s' % e)
             return
+        # 深度诊断：3秒/6秒/10秒分别检查进程状态
+        def _diag():
+            import time as _t
+            for _sec in (3, 6, 10):
+                _t.sleep(_sec - (0 if _sec == 3 else 3))
+                if _proc.poll() is not None:
+                    self._log('诊断: %d秒时Edge已退出（退出码=%s）' % (_sec, _proc.returncode))
+                    # 退出后尝试用临时空profile启动一次，验证是不是profile的问题
+                    if _sec == 3:
+                        import tempfile
+                        tmp_dir = os.path.join(tempfile.gettempdir(), 'wg_edge_test')
+                        try:
+                            import shutil
+                            if os.path.exists(tmp_dir):
+                                shutil.rmtree(tmp_dir, ignore_errors=True)
+                            os.makedirs(tmp_dir, exist_ok=True)
+                        except Exception:
+                            pass
+                        tmp_args = [edge, '--remote-debugging-port=9223',
+                                    '--remote-allow-origins=*',
+                                    '--no-first-run', '--no-default-browser-check',
+                                    '--user-data-dir=' + tmp_dir]
+                        self._log('诊断: 用临时空profile测试启动(端口9223)...')
+                        try:
+                            _tmp = subprocess.Popen(tmp_args)
+                            _t.sleep(4)
+                            if _tmp.poll() is None:
+                                self._log('诊断: 临时空profile启动成功！说明是复制的profile有问题')
+                                self._log('诊断: 建议删除 %s 后重新复制' % profile_dir)
+                                try:
+                                    _tmp.terminate()
+                                except Exception:
+                                    pass
+                            else:
+                                self._log('诊断: 临时空profile也退出了（退出码=%s），是Edge本身或参数的问题' % _tmp.returncode)
+                        except Exception as _e:
+                            self._log('诊断: 临时profile测试失败: %s' % _e)
+                    return
+                else:
+                    self._log('诊断: %d秒时Edge仍在运行' % _sec)
+            self._log('诊断: Edge持续运行10秒以上，启动正常')
+        threading.Thread(target=_diag, daemon=True).start()
         threading.Thread(target=self._wait_edge_ready, daemon=True).start()
 
     def _wait_edge_ready(self):
