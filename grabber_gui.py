@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v27'
+APP_VERSION = 'v28'
 import os
 import re
 import sys
@@ -669,55 +669,27 @@ class GrabberApp:
                 '--no-first-run',
                 '--no-default-browser-check',
                 '--user-data-dir=' + profile_dir]
-        self._log('诊断: 启动命令=%s' % ' '.join(args))
-        # 用 cmd /c start 方式启动（绕过 subprocess 环境继承问题）
         try:
-            import subprocess as _sp
-            cmd = 'start "" "%s" %s' % (edge, ' '.join('"%s"' % a if ' ' in a else a for a in args[1:]))
-            self._log('诊断: 通过 cmd start 启动: %s' % cmd)
-            _sp.run(['cmd', '/c', cmd], cwd=os.path.dirname(edge), timeout=10)
-            self._log('正在启动调试浏览器（Edge 9222 端口）...')
+            _proc = subprocess.Popen(args, cwd=os.path.dirname(edge))
+            self._log('正在启动调试浏览器（Edge 9222 端口，PID=%s）...' % _proc.pid)
         except Exception as e:
-            self._log('cmd start 启动失败，回退 Popen: %s' % e)
-            try:
-                _proc = subprocess.Popen(args, cwd=os.path.dirname(edge))
-                self._log('正在启动调试浏览器（Edge 9222 端口，PID=%s）...' % _proc.pid)
-            except Exception as e2:
-                self._log('启动调试浏览器失败: %s' % e2)
-                return
-        # 启动后立即检查：0.5秒/1秒/2秒/5秒
+            self._log('启动调试浏览器失败: %s' % e)
+            return
+        # 启动后检查进程状态
         def _check():
             import time as _t
-            for _sec in (0.5, 1, 2, 5, 10):
-                _t.sleep(_sec if _sec == 0.5 else _sec - (0.5 if _sec == 1 else (1 if _sec == 2 else (2 if _sec == 5 else 5))))
+            for _sec in (0.5, 1, 2, 5):
+                _t.sleep(_sec if _sec == 0.5 else _sec - (0.5 if _sec == 1 else (1 if _sec == 2 else 3)))
                 try:
                     _r = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq msedge.exe'],
                                         capture_output=True, text=True, timeout=5)
                     _count = _r.stdout.count('msedge.exe')
-                    self._log('诊断: %.1f秒时 msedge.exe 进程数=%d' % (_sec, _count))
-                    if _count > 0:
-                        if _sec >= 5:
-                            self._log('诊断: Edge 持续运行，启动正常')
-                            return
+                    if _count == 0:
+                        self._log('诊断: %.1f秒时 Edge 已退出，启动失败' % _sec)
+                        return
                 except Exception:
                     pass
-            self._log('诊断: 10秒内无 msedge.exe 进程，启动失败')
-            # 尝试用最简单的参数启动（不加调试端口）
-            self._log('诊断: 尝试不加调试端口启动，验证Edge本身是否正常...')
-            try:
-                simple_args = [edge, '--no-first-run', '--no-default-browser-check',
-                               '--user-data-dir=' + profile_dir]
-                subprocess.Popen(simple_args, cwd=os.path.dirname(edge))
-                import time as _t
-                _t.sleep(3)
-                _r = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq msedge.exe'],
-                                    capture_output=True, text=True, timeout=5)
-                if 'msedge.exe' in _r.stdout:
-                    self._log('诊断: 不加调试端口能启动！说明是 --remote-debugging-port 参数被限制（可能是组策略）')
-                else:
-                    self._log('诊断: 不加调试端口也启动失败，是Edge本身的问题')
-            except Exception as _e:
-                self._log('诊断: 简单启动测试失败: %s' % _e)
+            self._log('诊断: Edge 持续运行，启动正常')
         threading.Thread(target=_check, daemon=True).start()
         threading.Thread(target=self._wait_edge_ready, daemon=True).start()
 
