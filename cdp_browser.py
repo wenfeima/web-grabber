@@ -161,3 +161,99 @@ def grab_page(url, wait_sec=5, scroll_times=0, max_images=0, timeout=60, log=Non
                 close_page(target_id)
             except Exception:
                 pass
+
+
+def grab_list_page(url, wait_sec=5, scroll_times=3, max_posts=30, timeout=60, log=None):
+    '''列表页模式：自动识别帖子链接，逐个进入抓原图，返回 (images, videos)'''
+    def lg(m):
+        if log:
+            log(m)
+    if not is_connected():
+        raise RuntimeError('未检测到调试模式的浏览器')
+
+    # 第一步：打开列表页，提取帖子链接
+    lg('正在分析列表页，识别帖子链接...')
+    target_id = None
+    ws = None
+    post_links = []
+    try:
+        target_id, ws_url = _new_page('about:blank')
+        ws = websocket.create_connection(ws_url, timeout=timeout)
+        _send(ws, 'Page.enable')
+        _send(ws, 'Runtime.enable')
+        _send(ws, 'Page.navigate', {'url': url})
+        deadline = time.time() + wait_sec
+        while time.time() < deadline:
+            try:
+                r = _send(ws, 'Runtime.evaluate', {
+                    'expression': 'document.readyState', 'returnByValue': True})
+                if r.get('result', {}).get('result', {}).get('value', '') == 'complete':
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+        if scroll_times > 0:
+            for _ in range(scroll_times):
+                _send(ws, 'Runtime.evaluate', {'expression': 'window.scrollBy(0, document.body.scrollHeight);'})
+                time.sleep(1.0)
+        # 提取帖子链接的 JavaScript
+        js_expr = (
+            "(function(){"
+            "var links=document.querySelectorAll('a[href]');"
+            "var out=[];var seen={};"
+            "var host=location.hostname.replace(/^www\\./,'');"
+            "var skip=['/','/index','/home','/category','/tag','/tags','/search','/page','/about','/contact','/login','/register','/user','/users','/member','/members'];"
+            "links.forEach(function(a){"
+            "if(!a.href)return;"
+            "try{var u=new URL(a.href,location.href);}catch(e){return;}"
+            "if(u.hostname.replace(/^www\\./,'')!==host)return;"
+            "var p=u.pathname;if(p==='/'||p==='')return;"
+            "for(var i=0;i<skip.length;i++){if(p.indexOf(skip[i])===0)return;}"
+            "var parts=p.split('/').filter(Boolean);"
+            "if(parts.length<2&&!/\\d/.test(p))return;"
+            "var clean=u.origin+u.pathname;"
+            "if(!seen[clean]){seen[clean]=1;out.push(clean);}"
+            "});"
+            "return out;"
+            "})()"
+        )
+        r = _send(ws, 'Runtime.evaluate', {'expression': js_expr, 'returnByValue': True})
+        post_links = r.get('result', {}).get('result', {}).get('value', []) or []
+        if max_posts > 0:
+            post_links = post_links[:max_posts]
+        lg('识别到 %d 个帖子链接' % len(post_links))
+    finally:
+        if ws:
+            try: ws.close()
+            except Exception: pass
+        if target_id:
+            try: close_page(target_id)
+            except Exception: pass
+
+    if not post_links:
+        lg('未识别到帖子链接，回退为单页抓取')
+        return grab_page(url, wait_sec=wait_sec, scroll_times=scroll_times, timeout=timeout, log=log)
+
+    # 第二步：逐个进入帖子抓原图
+    all_images = []
+    all_videos = []
+    seen = set()
+    for idx, post_url in enumerate(post_links):
+        lg('[%d/%d] 正在抓取: %s' % (idx + 1, len(post_links), post_url))
+        try:
+            imgs, vids = grab_page(post_url, wait_sec=wait_sec, scroll_times=1, timeout=timeout, log=None)
+            for u in imgs:
+                if u not in seen:
+                    seen.add(u)
+                    all_images.append(u)
+            for u in vids:
+                if u not in seen:
+                    seen.add(u)
+                    all_videos.append(u)
+        except Exception as e:
+            lg('  抓取失败: %s' % str(e)[:80])
+        if (idx + 1) % 5 == 0:
+            lg('进度: %d/%d，已收集图片 %d 张' % (idx + 1, len(post_links), len(all_images)))
+
+    lg('列表页抓取完成：%d 个帖子，共图片 %d 张、视频 %d 个' % (len(post_links), len(all_images), len(all_videos)))
+    return all_images, all_videos

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v38'
+APP_VERSION = 'v39'
 import os
 import re
 import sys
@@ -841,8 +841,8 @@ class GrabberApp:
                     self._update_task(url, status='失败')
                     log('========== 抓取完成 ==========')
                     return
-                images, videos = cdp_browser.grab_page(url, wait_sec=6, scroll_times=3,
-                                                       log=log, timeout=60)
+                images, videos = cdp_browser.grab_list_page(url, wait_sec=6, scroll_times=3,
+                                                             max_posts=30, log=log, timeout=60)
                 title = 'browser_' + str(int(time.time()))
                 folder = os.path.join(save_dir, core.sanitize_filename(title))
                 os.makedirs(folder, exist_ok=True)
