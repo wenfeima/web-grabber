@@ -266,7 +266,7 @@ class GrabberApp:
         # 左侧：辅助按钮
         ttk.Button(btns, text='登录（可选）', command=self._open_login).pack(side='left', padx=5)
         # 登录状态提示灯（绿=已登录，红=未登录）
-        self.login_light = tk.Canvas(btns, width=16, height=16, highlightthickness=0, bg=btns.cget('bg'))
+        self.login_light = tk.Canvas(btns, width=16, height=16, highlightthickness=0)
         self.login_light.pack(side='left', padx=(0, 8))
         self._draw_login_light(False)
         ttk.Button(btns, text='清除登录', command=self._clear_login).pack(side='left', padx=5)
