@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v31'
+APP_VERSION = 'v32'
 import os
 import re
 import sys
@@ -676,55 +676,6 @@ class GrabberApp:
         except Exception as e:
             self._log('启动调试浏览器失败: %s' % e)
             return
-        # 启动后检查进程状态 + 端口访问诊断
-        def _check():
-            import time as _t
-            for _sec in (0.5, 1, 2, 5):
-                _t.sleep(_sec if _sec == 0.5 else _sec - (0.5 if _sec == 1 else (1 if _sec == 2 else 3)))
-                try:
-                    _r = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq msedge.exe'],
-                                        capture_output=True, text=True, timeout=5)
-                    _count = _r.stdout.count('msedge.exe')
-                    if _count == 0:
-                        self._log('诊断: %.1f秒时 Edge 已退出，启动失败' % _sec)
-                        return
-                except Exception:
-                    pass
-            self._log('诊断: Edge 持续运行，启动正常')
-            # 5秒后尝试访问调试端口
-            _t.sleep(1)
-            try:
-                import urllib.request as _ur
-                with _ur.urlopen('http://127.0.0.1:9222/json/version', timeout=3) as _resp:
-                    _body = _resp.read().decode('utf-8', errors='replace')[:300]
-                    self._log('诊断: 端口9222可访问! 返回: %s' % _body)
-            except Exception as _e:
-                self._log('诊断: 端口9222无法访问 - %s' % _e)
-                self._log('诊断: 可能是 --remote-debugging-port 参数未生效，尝试换端口9223重启...')
-                # 杀掉当前 Edge，用 9223 端口重启
-                try:
-                    subprocess.run(['taskkill', '/F', '/IM', 'msedge.exe'],
-                                   capture_output=True, text=True, timeout=10)
-                    _t.sleep(2)
-                except Exception:
-                    pass
-                try:
-                    args2 = [edge, '--remote-debugging-port=9223',
-                             '--remote-allow-origins=*',
-                             '--no-first-run', '--no-default-browser-check',
-                             '--user-data-dir=' + profile_dir]
-                    subprocess.Popen(args2, cwd=os.path.dirname(edge))
-                    self._log('诊断: 已用端口9223重新启动 Edge')
-                    _t.sleep(5)
-                    try:
-                        with _ur.urlopen('http://127.0.0.1:9223/json/version', timeout=3) as _resp2:
-                            _body2 = _resp2.read().decode('utf-8', errors='replace')[:300]
-                            self._log('诊断: 端口9223可访问! 返回: %s' % _body2)
-                    except Exception as _e2:
-                        self._log('诊断: 端口9223也无法访问 - %s' % _e2)
-                except Exception as _e3:
-                    self._log('诊断: 9223重启失败: %s' % _e3)
-        threading.Thread(target=_check, daemon=True).start()
         threading.Thread(target=self._wait_edge_ready, daemon=True).start()
 
     def _wait_edge_ready(self):
