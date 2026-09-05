@@ -1,7 +1,30 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v2.0.7'
+APP_VERSION = 'v2.1.1'
+
+# 浏览器自动检测：优先 Chrome，回退 Edge
+def _detect_browser():
+    """返回 (browser_type, exe_path, process_name)"""
+    import os
+    chrome_paths = [
+        r'C:\Program Files\Google\Chrome\Application\chrome.exe',
+        r'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe',
+        os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    ]
+    edge_paths = [
+        r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
+        r'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
+    ]
+    for p in chrome_paths:
+        if os.path.exists(p):
+            return ('chrome', p, 'chrome.exe')
+    for p in edge_paths:
+        if os.path.exists(p):
+            return ('edge', p, 'msedge.exe')
+    return ('unknown', '', '')
+
+BROWSER_TYPE, BROWSER_EXE, BROWSER_PROCESS = _detect_browser()
 import os
 import re
 import sys
@@ -598,7 +621,8 @@ class GrabberApp:
         if self.browser_mode.get():
             self._log('浏览器模式：点「启动调试浏览器」一键启动浏览器（9222 端口，含油猴/登录态，优先Chrome回退Edge），或先手动开好调试端口')
         else:
-            self._log('浏览器模式已关闭')
+            self._url_sync_running = False
+        self._log('浏览器模式已关闭')
 
     def _open_edge_solo(self):
         """独立窗口打开浏览器（用同一个调试profile，方便登录和装插件）"""
@@ -659,6 +683,8 @@ class GrabberApp:
 
     def _start_debug_edge(self):
         """超链接点击：启动/连接调试 Edge，就绪后自动嵌入「浏览器」页签"""
+        self._log('正在启动调试浏览器...')
+        self._log('检测到浏览器: %s (%s)' % (BROWSER_TYPE, BROWSER_EXE))
         try:
             import cdp_browser
             if cdp_browser.is_connected():
@@ -670,7 +696,6 @@ class GrabberApp:
         chrome = BROWSER_EXE
         if not chrome or not os.path.isfile(chrome):
             self._log('错误: 未找到 Chrome 或 Edge，请安装浏览器后再试')
-            return
             return
         import edge_profile
         if not edge_profile.profile_exists():
@@ -742,8 +767,9 @@ class GrabberApp:
                 _fp = os.path.join(profile_dir, _lf)
                 if os.path.exists(_fp):
                     os.remove(_fp)
-            except Exception:
-                pass
+                    self._log('已清理锁文件: %s' % _lf)
+            except Exception as e:
+                self._log('警告: 清理锁文件 %s 失败: %s' % (_lf, e))
         args = [chrome, '--remote-debugging-port=9222',
                 '--remote-allow-origins=*',
                 '--no-first-run',
@@ -760,11 +786,25 @@ class GrabberApp:
                 os.rename(version_dll, version_dll_bak)
                 renamed = True
                 self._log('已临时禁用浏览器修改版注入（version.dll）')
-            except Exception:
-                pass
+            except Exception as e:
+                self._log('警告: version.dll 重命名失败: %s' % e)
+                self._log('可能是 Chrome 正在运行，请先完全退出 Chrome（含后台）后再试')
         try:
             _proc = subprocess.Popen(args, cwd=chrome_dir)
             self._log('正在启动调试浏览器（9222 端口，PID=%s）...' % _proc.pid)
+            # 等2秒检查进程是否还活着
+            import time as _t
+            _t.sleep(2)
+            if _proc.poll() is not None:
+                self._log('警告: 浏览器进程已退出（退出码=%s），可能是 version.dll 注入未完全禁用' % _proc.poll())
+                # 恢复 version.dll
+                if renamed and os.path.exists(version_dll_bak):
+                    try:
+                        os.rename(version_dll_bak, version_dll)
+                        self._log('已恢复 version.dll')
+                    except Exception:
+                        pass
+                return
         except Exception as e:
             self._log('启动调试浏览器失败: %s' % e)
             # 启动失败，立即恢复 version.dll
@@ -802,7 +842,7 @@ class GrabberApp:
                 if _try == 5:
                     self._log('诊断: 前5次连接失败，最后错误: %s' % last_err)
         if not ok:
-            self._log('错误: 20秒内未连上 Edge 调试端口 9222，最后错误: %s' % last_err)
+            self._log('错误: 20秒内未连上浏览器调试端口 9222，最后错误: %s' % last_err)
             return
         self._log('端口已连接，正在查找 Edge 窗口（最多15秒）...')
         hwnd = embed_edge.find_edge_window(timeout=15)
@@ -830,7 +870,11 @@ class GrabberApp:
             import traceback
             self._log('详细错误: %s' % traceback.format_exc())
             return
-        self._log('Edge 已嵌入「浏览器」页签（可手动浏览/登录，抓取时自动开标签）')
+        self._log('浏览器已嵌入「浏览器」页签（可手动浏览/登录，抓取时自动开标签）')
+        # 启动 URL 同步线程：浏览器里看哪个页面，地址栏自动同步成哪个
+        self._url_sync_running = True
+        threading.Thread(target=self._sync_url_thread, daemon=True).start()
+        self._log('地址栏同步已开启（浏览器浏览的页面会自动同步到上方地址栏）')
         if hasattr(self, 'tab_brw_hint'):
             try:
                 self.tab_brw_hint.destroy()
@@ -852,6 +896,30 @@ class GrabberApp:
                 embed_edge.resize_edge(hwnd, 0, 0, e.width, e.height)
             except Exception:
                 pass
+
+    def _sync_url_thread(self):
+        """后台线程：每隔1秒获取浏览器当前页面 URL，同步到地址栏"""
+        import time as _t
+        last_url = ''
+        while getattr(self, '_url_sync_running', False):
+            try:
+                import cdp_browser
+                url = cdp_browser.get_current_url()
+                if url and url != last_url and url != 'about:blank':
+                    # 检查地址栏是否有焦点（用户正在输入时不覆盖）
+                    try:
+                        focused = self.root.focus_get()
+                        if focused is not None and str(focused) == str(self.url_entry):
+                            _t.sleep(1)
+                            continue
+                    except Exception:
+                        pass
+                    # 更新地址栏
+                    last_url = url
+                    self.root.after(0, lambda u=url: self.url_var.set(u))
+            except Exception:
+                pass
+            _t.sleep(1)
 
     def _stop_grab(self):
         self.stop_flag.set()
@@ -880,7 +948,7 @@ class GrabberApp:
 
         # 浏览器模式：通过 CDP 连接调试模式的 Edge（含油猴/登录态）抓取
         if self.browser_mode.get():
-            log('抓取模式: 浏览器模式（连接 Edge 调试端口）')
+            log('抓取模式: 浏览器模式（连接浏览器调试端口）')
             self._add_task(url, '浏览器抓取')
             try:
                 import cdp_browser
@@ -890,7 +958,7 @@ class GrabberApp:
                     log('========== 抓取完成 ==========')
                     return
                 posts = cdp_browser.grab_list_page(url, wait_sec=6, scroll_times=3,
-                                                             max_posts=30, log=log, timeout=60)
+                                                             max_posts=200, log=log, timeout=60)
                 self.stats_imgs = 0
                 self.stats_vids = 0
                 _fetcher = core.Fetcher(self.cookie, proxy, self.stop_flag)
@@ -990,9 +1058,12 @@ class GrabberApp:
                 for i, (u, t, th) in enumerate(threads_list, 1):
                     self._add_task(u, t, th)
                 def work(item):
+                    log('[全站抓取] work被调用, stop_flag=%s' % self.stop_flag.is_set())
                     if self.stop_flag.is_set():
+                        log('[全站抓取] stop_flag已设置，跳过')
                         return
                     u, t, th = item
+                    log('[全站抓取] 开始下载: %s' % t[:50])
                     self._update_task(u, status='下载中')
                     def cb(done, total):
                         self._update_task(u, progress=(done, total), status='下载中')
@@ -1002,13 +1073,15 @@ class GrabberApp:
                                          progress_cb=cb, stop_event=self.stop_flag)
                         _rt = _r[2] if len(_r) >= 3 else t
                         self._update_task(u, status='完成', title=_rt)
+                        log('[全站抓取] 完成: %s' % t[:50])
                     except core.GrabError as e:
                         self._update_task(u, status='失败')
                         log('  [失败] %s: %s' % (t, e))
                     except Exception as e:
                         self._update_task(u, status='失败')
                         log('  [失败] %s: %s' % (t, e))
-                with ThreadPoolExecutor(max_workers=threads) as ex:
+                log('[全站抓取] 开始并发下载，线程数=%d，共%d个帖子' % (threads, len(threads_list)))
+                with ThreadPoolExecutor(max_workers=max(1, threads)) as ex:
                     list(ex.map(work, threads_list))
                 log('========== 抓取完成 ==========')
                 return

@@ -51,6 +51,25 @@ def open_url(url):
         return None
 
 
+def get_current_url():
+    """获取浏览器当前活动标签页的 URL（用于地址栏同步）"""
+    try:
+        pages = _list_pages()
+        # 找第一个 type=page 且不是内部页面的标签页
+        for p in pages:
+            if p.get('type') == 'page':
+                url = p.get('url', '')
+                if url and url != 'about:blank' and not url.startswith('chrome://') and not url.startswith('edge://'):
+                    return url
+        # 如果都不符合，返回第一个 page 的 URL
+        for p in pages:
+            if p.get('type') == 'page':
+                return p.get('url', '')
+        return ''
+    except Exception:
+        return ''
+
+
 def _send(ws, method, params=None, msg_id=None):
     if msg_id is None:
         msg_id = int(time.time() * 1000) % 1000000
@@ -98,36 +117,108 @@ def grab_page(url, wait_sec=5, scroll_times=0, max_images=0, timeout=60, log=Non
                     'expression': 'window.scrollBy(0, document.body.scrollHeight);',
                 })
                 time.sleep(1.0)
-        # 提取图片：过滤小图和无关图，优先大图
+        # 提取图片：过滤小图和无关图，优先大图，支持更多懒加载属性和srcset
         expr = r"""
 (function(){
   var imgs = document.querySelectorAll('img');
   var out = [];
   var seen = {};
-  var skipKw = ['logo','avatar','qrcode','qr-code','emoji','smile','spinner','placeholder'];
+  var skipKw = ['logo','avatar','qrcode','qr-code','emoji','smile','spinner','placeholder','icon'];
+  // 缩略图关键词（用于识别和转换）
+  var thumbKw = ['thumb','thumbnail','_small','_medium','_cover','_avatar','_150x150','_300x300','_200x200','_100x100','_50x50','/w150','/w200','/w300','?w=150','?w=200','?w=300','?imageView2','?x-oss-process'];
   function add(u, w, h){
     if(!u) return;
     u = u.trim();
     if(!u || u.startsWith('data:') || u.startsWith('blob:')) return;
     try{ u = new URL(u, location.href).href; }catch(e){ return; }
     var low = u.toLowerCase();
-    // 只过滤明显的无关图（logo/头像/二维码/表情）
     for(var i=0;i<skipKw.length;i++){ if(low.indexOf(skipKw[i])>=0) return; }
-    // 只过滤极小图（<50px的图标/logo），不过滤正常缩略图
     if(w && h && (w < 50 && h < 50)) return;
     if(!seen[u]){ seen[u]=1; out.push(u); }
+  }
+  // 解析 srcset，取最大尺寸的图片
+  function parseSrcset(srcset){
+    if(!srcset) return null;
+    var parts = srcset.split(',');
+    var maxUrl = null;
+    var maxW = 0;
+    parts.forEach(function(p){
+      p = p.trim();
+      var m = p.match(/^(\S+)\s+(\d+)w$/);
+      if(m){
+        var w = parseInt(m[2]);
+        if(w > maxW){ maxW = w; maxUrl = m[1]; }
+      } else if(p){
+        if(!maxUrl) maxUrl = p.split(' ')[0];
+      }
+    });
+    return maxUrl;
+  }
+  // 尝试把缩略图URL转换成原图URL
+  function toOriginal(u){
+    if(!u) return null;
+    var low = u.toLowerCase();
+    // 去掉常见的缩略图参数
+    var patterns = [
+      [/_thumb\.(jpg|jpeg|png|webp|gif)$/i, '.$1'],
+      [/_small\.(jpg|jpeg|png|webp|gif)$/i, '.$1'],
+      [/_medium\.(jpg|jpeg|png|webp|gif)$/i, '.$1'],
+      [/_cover\.(jpg|jpeg|png|webp|gif)$/i, '.$1'],
+      [/_\d+x\d+\.(jpg|jpeg|png|webp|gif)$/i, '.$1'],
+      [/[?&]w=\d+.*$/i, ''],
+      [/[?&]h=\d+.*$/i, ''],
+      [/\?imageView2.*$/i, ''],
+      [/\?x-oss-process.*$/i, ''],
+      [/\/thumb\//i, '/'],
+      [/\/thumbnail\//i, '/'],
+      [/\/small\//i, '/'],
+      [/\/medium\//i, '/'],
+    ];
+    for(var i=0;i<patterns.length;i++){
+      if(patterns[i][0].test(u)){
+        var orig = u.replace(patterns[i][0], patterns[i][1]);
+        if(orig !== u) return orig;
+      }
+    }
+    return null;
   }
   imgs.forEach(function(im){
     var w = im.naturalWidth || im.width || 0;
     var h = im.naturalHeight || im.height || 0;
+    // 基本属性
     add(im.currentSrc || im.src, w, h);
-    ['data-src','data-original','data-lazy-src','data-url','src','data-lazy','data-actual'].forEach(function(a){
-      add(im.getAttribute(a), w, h);
+    // 更多懒加载属性
+    ['data-src','data-original','data-lazy-src','data-url','src','data-lazy','data-actual',
+     'data-full','data-large','data-big','data-hd','data-origin','data-real','data-raw',
+     'data-srcset','data-orig','data-originalsrc','data-lazyload','data-load'].forEach(function(a){
+      var val = im.getAttribute(a);
+      if(val){
+        if(a.indexOf('srcset')>=0){
+          var parsed = parseSrcset(val);
+          if(parsed) add(parsed, w, h);
+        } else {
+          add(val, w, h);
+        }
+      }
     });
+    // srcset 属性
+    var srcset = im.srcset || im.getAttribute('srcset');
+    if(srcset){
+      var parsed = parseSrcset(srcset);
+      if(parsed) add(parsed, w, h);
+    }
+    // 尝试把当前图片转换成原图
+    var orig = toOriginal(im.currentSrc || im.src);
+    if(orig) add(orig, 0, 0);
   });
-  // 直接链接到图片的 a 标签（通常是原图链接）
-  document.querySelectorAll('a[href$=".jpg"],a[href$=".jpeg"],a[href$=".png"],a[href$=".webp"],a[href$=".gif"],a[href$=".mp4"],a[href$=".webm"]').forEach(function(a){
-    add(a.href, 0, 0);
+  // 直接链接到图片的 a 标签（通常是原图链接）- 支持更多扩展名和查询参数
+  document.querySelectorAll('a').forEach(function(a){
+    var href = a.href || '';
+    if(!href) return;
+    var low = href.toLowerCase().split('?')[0];
+    if(low.match(/\.(jpg|jpeg|png|webp|gif|bmp|mp4|webm|mov)$/)){
+      add(href, 0, 0);
+    }
   });
   return out;
 })()
@@ -203,12 +294,12 @@ def grab_list_page(url, wait_sec=5, scroll_times=3, max_posts=30, timeout=60, lo
                 _send(ws, 'Runtime.evaluate', {'expression': 'window.scrollBy(0, document.body.scrollHeight);'})
                 time.sleep(1.0)
         # 提取帖子链接的 JavaScript
-        js_expr = "(function(){var out=[];var seen={};var host=location.hostname.replace(/^www\\./,'');var links=document.querySelectorAll('a');var total=links.length;var sameHost=0;links.forEach(function(a){if(!a.href)return;try{var u=new URL(a.href,location.href);}catch(e){return;}if(u.hostname.replace(/^www\\./,'')!==host)return;sameHost++;var p=u.pathname;if(p==='/'||p==='')return;var clean=u.origin+u.pathname;if(!seen[clean]){seen[clean]=1;out.push(clean);}});return JSON.stringify({total:total,sameHost:sameHost,found:out.length,links:out,sample:out.slice(0,10)});})()"
+        js_expr = "(function(){var out=[];var seen={};var host=location.hostname.replace(/^www\\./,'');var navKw=['nav','menu','header','footer','sidebar','widget','breadcrumb','pagination','pager','toolbar','topbar','bottom','social','share','follow','subscribe','login','register','signup','search','about','contact','category','tag','archive','author','user','member','profile','comment'];function isNav(el){var e=el;while(e&&e!==document.body){if(e.tagName){var t=e.tagName.toLowerCase();if(t==='nav'||t==='header'||t==='footer'||t==='aside')return true;}var c=(e.className&&typeof e.className==='string')?e.className.toLowerCase():'';var i=(e.id&&typeof e.id==='string')?e.id.toLowerCase():'';for(var k=0;k<navKw.length;k++){if(c.indexOf(navKw[k])>=0||i.indexOf(navKw[k])>=0)return true;}e=e.parentElement;}return false;}var pathKw=['/about','/contact','/category','/tag','/archive','/search','/login','/register','/signup','/user','/member','/profile','/author','/comment','/page/','/feed','/rss','/sitemap','/tags','/categories'];var links=document.querySelectorAll('a');var total=links.length;var sameHost=0;var filtered=0;links.forEach(function(a){if(!a.href)return;try{var u=new URL(a.href,location.href);}catch(e){return;}if(u.hostname.replace(/^www\\./,'')!==host)return;sameHost++;var p=u.pathname;if(p==='/'||p==='')return;if(isNav(a)){filtered++;return;}var pl=p.toLowerCase();for(var k=0;k<pathKw.length;k++){if(pl.indexOf(pathKw[k])===0){filtered++;return;}}var clean=u.origin+u.pathname;if(!seen[clean]){seen[clean]=1;out.push(clean);}});return JSON.stringify({total:total,sameHost:sameHost,filtered:filtered,found:out.length,links:out,sample:out.slice(0,10)});})()"
         r = _send(ws, 'Runtime.evaluate', {'expression': js_expr, 'returnByValue': True})
         _raw_val = r.get('result', {}).get('result', {}).get('value', '{}')
         try:
             _debug = json.loads(_raw_val) if isinstance(_raw_val, str) else {}
-            lg('调试: 页面链接总数=%d, 同域名=%d, 识别到=%d' % (_debug.get('total',0), _debug.get('sameHost',0), _debug.get('found',0)))
+            lg('调试: 页面链接总数=%d, 同域名=%d, 过滤导航=%d, 识别到=%d' % (_debug.get('total',0), _debug.get('sameHost',0), _debug.get('filtered',0), _debug.get('found',0)))
             if _debug.get('sample'):
                 lg('前10个链接: %s' % str(_debug['sample'])[:200])
             post_links = _debug.get('links', [])
