@@ -601,13 +601,10 @@ class GrabberApp:
             self._log('浏览器模式已关闭')
 
     def _open_edge_solo(self):
-        """独立窗口打开 Chrome（用同一个调试profile，方便登录Google账户和装插件）"""
+        """独立窗口打开浏览器（用同一个调试profile，方便登录和装插件）"""
         chrome = BROWSER_EXE
-        if not os.path.isfile(edge):
+        if not chrome or not os.path.isfile(chrome):
             self._log('错误: 未找到 Chrome 或 Edge，请安装浏览器后再试')
-            return
-        if not os.path.isfile(edge):
-            self._log('错误: 未找到 Edge')
             return
         import edge_profile
         profile_dir = edge_profile.DEBUG_PROFILE_DIR
@@ -624,12 +621,12 @@ class GrabberApp:
                 '--disable-session-crashed-bubble',
                 '--user-data-dir=' + profile_dir]
         try:
-            subprocess.Popen(args, cwd=os.path.dirname(edge))
-            self._log('已独立窗口打开 Edge（同一个调试profile）')
-            self._log('请在这个窗口里登录Google账户、装好需要的插件，完成后关闭窗口')
+            subprocess.Popen(args, cwd=os.path.dirname(chrome))
+            self._log('已独立窗口打开浏览器（同一个调试profile）')
+            self._log('请在这个窗口里登录账号、装好需要的插件，完成后关闭窗口')
             self._log('然后再点「启动调试浏览器」，登录态和插件就会在内嵌浏览器里生效')
         except Exception as e:
-            self._log('独立窗口打开 Edge 失败: %s' % e)
+            self._log('独立窗口打开失败: %s' % e)
 
     def _start_debug_edge(self):
         """超链接点击：启动/连接调试 Edge，就绪后自动嵌入「浏览器」页签"""
@@ -642,11 +639,9 @@ class GrabberApp:
         except Exception:
             pass
         chrome = BROWSER_EXE
-        if not os.path.isfile(edge):
+        if not chrome or not os.path.isfile(chrome):
             self._log('错误: 未找到 Chrome 或 Edge，请安装浏览器后再试')
             return
-        if not os.path.isfile(edge):
-            self._log('错误: 未找到 Chrome，请安装 Google Chrome 后再试')
             return
         import edge_profile
         if not edge_profile.profile_exists():
@@ -660,7 +655,7 @@ class GrabberApp:
                     '约几百 MB，仅首次一次；之后日常 Edge 与抓取互不影响。\n\n是否继续？'):
                 self._log('已取消浏览器模式初始化')
                 return
-            threading.Thread(target=self._first_time_edge_setup, args=(edge,), daemon=True).start()
+            threading.Thread(target=self._first_time_edge_setup, args=(chrome,), daemon=True).start()
             return
         # 启动前检测：如果 Edge 正在运行，提示用户保存工作后自动关闭
         import edge_profile
@@ -695,18 +690,18 @@ class GrabberApp:
                     self._log('警告: 仍有 Edge 进程残留，可能导致启动失败')
             except Exception:
                 pass
-        self._launch_debug_edge(edge)
+        self._launch_debug_edge(chrome)
 
-    def _first_time_edge_setup(self, edge):
+    def _first_time_edge_setup(self, chrome):
         """后台线程：复制 Chrome 配置后启动调试浏览器"""
         import edge_profile
         ok, msg = edge_profile.copy_profile(log=self._log)
         if not ok:
             self._log('首次配置复制失败: %s' % msg)
             return
-        self._launch_debug_edge(edge)
+        self._launch_debug_edge(chrome)
 
-    def _launch_debug_edge(self, edge):
+    def _launch_debug_edge(self, chrome):
         """启动调试 Edge（独立调试 profile，端口必开）"""
         import edge_profile
         profile_dir = edge_profile.DEBUG_PROFILE_DIR
@@ -727,7 +722,7 @@ class GrabberApp:
                 '--disable-session-crashed-bubble',
                 '--user-data-dir=' + profile_dir]
         try:
-            _proc = subprocess.Popen(args, cwd=os.path.dirname(edge))
+            _proc = subprocess.Popen(args, cwd=os.path.dirname(chrome))
             self._log('正在启动调试浏览器（9222 端口，PID=%s）...' % _proc.pid)
         except Exception as e:
             self._log('启动调试浏览器失败: %s' % e)
