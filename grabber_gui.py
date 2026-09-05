@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v32'
+APP_VERSION = 'v33'
 import os
 import re
 import sys
@@ -229,6 +229,11 @@ class GrabberApp:
                                   cursor='hand2', font=('Microsoft YaHei UI', 9, 'underline'))
         self.edge_link.pack(side='left', padx=(0, 8))
         self.edge_link.bind('<Button-1>', lambda e: self._start_debug_edge())
+        # 超链接：独立窗口打开 Edge（登录/装插件用，同一个profile）
+        self.edge_solo_link = tk.Label(opt, text='独立窗口打开(登录/装插件)', foreground='#1a6fd4',
+                                        cursor='hand2', font=('Microsoft YaHei UI', 9, 'underline'))
+        self.edge_solo_link.pack(side='left', padx=(0, 8))
+        self.edge_solo_link.bind('<Button-1>', lambda e: self._open_edge_solo())
 
         self.grab_img = tk.BooleanVar(value=True)
         self.grab_vid = tk.BooleanVar(value=True)
@@ -575,6 +580,36 @@ class GrabberApp:
             self._log('浏览器模式：点「启动调试浏览器」一键启动 Edge（9222 端口，含油猴/登录态），或先手动开好调试端口')
         else:
             self._log('浏览器模式已关闭')
+
+    def _open_edge_solo(self):
+        """独立窗口打开 Edge（用同一个调试profile，方便登录Microsoft账户和装插件）"""
+        edge = r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+        if not os.path.isfile(edge):
+            edge = r'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
+        if not os.path.isfile(edge):
+            self._log('错误: 未找到 Edge')
+            return
+        import edge_profile
+        profile_dir = edge_profile.DEBUG_PROFILE_DIR
+        # 清理锁文件
+        for lf in ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'lockfile', 'Lockfile']:
+            try:
+                fp = os.path.join(profile_dir, lf)
+                if os.path.exists(fp):
+                    os.remove(fp)
+            except Exception:
+                pass
+        # 不加 --remote-debugging-port，普通方式启动（独立窗口）
+        args = [edge, '--no-first-run', '--no-default-browser-check',
+                '--disable-session-crashed-bubble',
+                '--user-data-dir=' + profile_dir]
+        try:
+            subprocess.Popen(args, cwd=os.path.dirname(edge))
+            self._log('已独立窗口打开 Edge（同一个调试profile）')
+            self._log('请在这个窗口里登录Microsoft账户、装好需要的插件，完成后关闭窗口')
+            self._log('然后再点「启动调试浏览器」，登录态和插件就会在内嵌浏览器里生效')
+        except Exception as e:
+            self._log('独立窗口打开 Edge 失败: %s' % e)
 
     def _start_debug_edge(self):
         """超链接点击：启动/连接调试 Edge，就绪后自动嵌入「浏览器」页签"""
