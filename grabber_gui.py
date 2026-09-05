@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v2.1.1'
+APP_VERSION = 'v2.1.5'
 
 # 浏览器自动检测：优先 Chrome，回退 Edge
 def _detect_browser():
