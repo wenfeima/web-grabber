@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v35'
+APP_VERSION = 'v36'
 import os
 import re
 import sys
@@ -260,15 +260,15 @@ class GrabberApp:
         self.engine_hint = ttk.Label(opt2, text='', foreground='#888')
         self.engine_hint.pack(side='left', padx=(6, 0))
 
-        # ---- 第6行：登录状态 + 按钮 ----
-        self.login_label = ttk.Label(frm, text='登录状态: 未登录（不需要登录的网站可忽略）',
-                                     foreground='#666')
-        self.login_label.grid(row=6, column=0, columnspan=5, sticky='w', **pad)
-
+        # ---- 第6行：按钮 + 登录状态提示灯 ----
         btns = ttk.Frame(frm)
-        btns.grid(row=7, column=0, columnspan=5, sticky='we', **pad)
+        btns.grid(row=6, column=0, columnspan=5, sticky='we', **pad)
         # 左侧：辅助按钮
         ttk.Button(btns, text='登录（可选）', command=self._open_login).pack(side='left', padx=5)
+        # 登录状态提示灯（绿=已登录，红=未登录）
+        self.login_light = tk.Canvas(btns, width=16, height=16, highlightthickness=0, bg=btns.cget('bg'))
+        self.login_light.pack(side='left', padx=(0, 8))
+        self._draw_login_light(False)
         ttk.Button(btns, text='清除登录', command=self._clear_login).pack(side='left', padx=5)
         ttk.Button(btns, text='停止', command=self._stop_grab).pack(side='left', padx=5)
         ttk.Button(btns, text='预览列表', command=self._preview_list).pack(side='left', padx=5)
@@ -282,8 +282,8 @@ class GrabberApp:
         # ---- 第6行：主内容区分页：任务列表 / 运行日志 ----
         self.nb = ttk.Notebook(frm)
         nb = self.nb
-        nb.grid(row=8, column=0, columnspan=6, sticky='nsew', padx=5, pady=4)
-        frm.rowconfigure(8, weight=1)
+        nb.grid(row=7, column=0, columnspan=6, sticky='nsew', padx=5, pady=4)
+        frm.rowconfigure(7, weight=1)
 
         # --- 页1：任务列表（表格 + 统计栏） ---
         tab_list = ttk.Frame(nb)
@@ -407,6 +407,13 @@ class GrabberApp:
         self.root.after(150, self._poll_log)
 
     # ---------------- 登录 ----------------
+    def _draw_login_light(self, logged_in):
+        '''画登录状态提示灯：绿=已登录，红=未登录'''
+        self.login_light.delete('all')
+        color = '#22c55e' if logged_in else '#ef4444'
+        self.login_light.create_oval(2, 2, 14, 14, fill=color, outline=color)
+        self.login_light.create_oval(4, 4, 8, 8, fill='white', outline='')
+
     def _open_login(self):
         url = self.url_var.get().strip()
         if url.startswith('★ '):
@@ -445,8 +452,7 @@ class GrabberApp:
                     if data.get('cookie'):
                         self.cookie = data['cookie']
                         domain = data.get('domain', '')
-                        self.login_label.configure(
-                            text='登录状态: 已登录 (%s)  ✓' % domain, foreground='green')
+                        self._draw_login_light(True)
                         self._log('已获取登录状态: %s' % domain)
                         return
                 except Exception:
@@ -461,7 +467,7 @@ class GrabberApp:
                 os.remove(LOGIN_COOKIE_FILE)
             except Exception:
                 pass
-        self.login_label.configure(text='登录状态: 未登录', foreground='#666')
+        self._draw_login_light(False)
         self._log('已清除登录状态')
 
     # ---------------- 抓取 ----------------
