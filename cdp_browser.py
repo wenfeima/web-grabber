@@ -98,27 +98,39 @@ def grab_page(url, wait_sec=5, scroll_times=0, max_images=0, timeout=60, log=Non
                     'expression': 'window.scrollBy(0, document.body.scrollHeight);',
                 })
                 time.sleep(1.0)
-        # 提取所有图片和视频地址（含懒加载属性、油猴注入的）
+        # 提取图片：过滤小图和无关图，优先大图
         expr = r"""
 (function(){
   var imgs = document.querySelectorAll('img');
   var out = [];
   var seen = {};
-  function add(u){
+  var skipKw = ['logo','avatar','icon','qrcode','qr-code','ad-','banner','head','portrait','gravatar','emoji','smile','loading','spinner','placeholder','default'];
+  var thumbKw = ['thumb','small','mini','_100x','_150x','_200x','_250x','_300x','?w=100','?w=150','?w=200','?w=250','?w=300','/s/','/m/'];
+  function add(u, w, h){
     if(!u) return;
     u = u.trim();
     if(!u || u.startsWith('data:') || u.startsWith('blob:')) return;
     try{ u = new URL(u, location.href).href; }catch(e){ return; }
+    var low = u.toLowerCase();
+    // 过滤无关关键词
+    for(var i=0;i<skipKw.length;i++){ if(low.indexOf(skipKw[i])>=0) return; }
+    // 过滤缩略图
+    for(var i=0;i<thumbKw.length;i++){ if(low.indexOf(thumbKw[i])>=0) return; }
+    // 过滤小图（logo/头像/二维码通常小于200px）
+    if(w && h && (w < 200 || h < 200)) return;
     if(!seen[u]){ seen[u]=1; out.push(u); }
   }
   imgs.forEach(function(im){
-    add(im.currentSrc || im.src);
-    ['data-src','data-original','data-lazy-src','data-url','src'].forEach(function(a){
-      add(im.getAttribute(a));
+    var w = im.naturalWidth || im.width || 0;
+    var h = im.naturalHeight || im.height || 0;
+    add(im.currentSrc || im.src, w, h);
+    ['data-src','data-original','data-lazy-src','data-url','src','data-lazy','data-actual'].forEach(function(a){
+      add(im.getAttribute(a), w, h);
     });
   });
+  // 直接链接到图片的 a 标签（通常是原图链接）
   document.querySelectorAll('a[href$=".jpg"],a[href$=".jpeg"],a[href$=".png"],a[href$=".webp"],a[href$=".gif"],a[href$=".mp4"],a[href$=".webm"]').forEach(function(a){
-    add(a.href);
+    add(a.href, 0, 0);
   });
   return out;
 })()
