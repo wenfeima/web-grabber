@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v2.1.5'
+APP_VERSION = 'v2.1.7'
 
 # 浏览器自动检测：优先 Chrome，回退 Edge
 def _detect_browser():
@@ -1081,8 +1081,20 @@ class GrabberApp:
                         self._update_task(u, status='失败')
                         log('  [失败] %s: %s' % (t, e))
                 log('[全站抓取] 开始并发下载，线程数=%d，共%d个帖子' % (threads, len(threads_list)))
+                log('[全站抓取] threads_list类型=%s, 长度=%d' % (type(threads_list).__name__, len(threads_list)))
+                # 先用串行测试，确认work函数能被调用
+                for _idx, _item in enumerate(threads_list[:3]):
+                    log('[全站抓取] 串行测试 [%d/%d]' % (_idx+1, min(3, len(threads_list))))
+                    work(_item)
+                log('[全站抓取] 串行测试完成，开始并发下载剩余%d个' % max(0, len(threads_list)-3))
                 with ThreadPoolExecutor(max_workers=max(1, threads)) as ex:
-                    list(ex.map(work, threads_list))
+                    _futures = [ex.submit(work, _item) for _item in threads_list[3:]]
+                    log('[全站抓取] 已提交%d个并发任务' % len(_futures))
+                    for _f in _futures:
+                        try:
+                            _f.result(timeout=120)
+                        except Exception as _e:
+                            log('[全站抓取] 任务异常: %s' % _e)
                 log('========== 抓取完成 ==========')
                 return
             # 入口不是列表页：BFS 遍历整个站点

@@ -306,9 +306,68 @@ def grab_list_page(url, wait_sec=5, scroll_times=3, max_posts=30, timeout=60, lo
         except Exception as _e:
             lg('解析调试信息失败: %s' % _e)
             post_links = []
-        if max_posts > 0:
+        if max_posts > 0 and len(post_links) >= max_posts:
             post_links = post_links[:max_posts]
-        lg('识别到 %d 个帖子链接' % len(post_links))
+            lg('识别到 %d 个帖子链接（已达上限）' % len(post_links))
+        else:
+            lg('识别到 %d 个帖子链接' % len(post_links))
+
+        # 翻页逻辑：识别"下一页"链接，自动翻页继续抓
+        max_pages = 50  # 最大翻页数，防止无限翻页
+        all_links = list(post_links)
+        seen_links = set(all_links)
+        for page_num in range(2, max_pages + 1):
+            if max_posts > 0 and len(all_links) >= max_posts:
+                lg('已达最大帖子数 %d，停止翻页' % max_posts)
+                break
+            # 识别下一页链接
+            next_js = "(function(){var host=location.hostname.replace(/^www\./,'');var nextTexts=['下一页','下页','下一頁','下一页','next','>','»','›','下一个','后一页','后页'];var nextClasses=['next','pagination-next','page-next','pager-next','next-page','nextpage'];var links=document.querySelectorAll('a');for(var i=0;i<links.length;i++){var a=links[i];if(!a.href)continue;try{var u=new URL(a.href,location.href);}catch(e){continue;}if(u.hostname.replace(/^www\./,'')!==host)continue;var text=(a.textContent||a.innerText||'').trim().toLowerCase();var cls=(a.className&&typeof a.className==='string')?a.className.toLowerCase():'';var rel=(a.getAttribute&&a.getAttribute('rel'))?a.getAttribute('rel').toLowerCase():'';if(rel==='next')return a.href;for(var k=0;k<nextTexts.length;k++){if(text===nextTexts[k]||text.indexOf(nextTexts[k])>=0&&text.length<=10)return a.href;}for(var k=0;k<nextClasses.length;k++){if(cls.indexOf(nextClasses[k])>=0)return a.href;}}return '';})()"
+            try:
+                r = _send(ws, 'Runtime.evaluate', {'expression': next_js, 'returnByValue': True})
+                next_url = r.get('result', {}).get('result', {}).get('value', '')
+            except Exception:
+                next_url = ''
+            if not next_url:
+                lg('未找到下一页链接，停止翻页（共 %d 页）' % (page_num - 1))
+                break
+            lg('正在翻到第 %d 页: %s' % (page_num, next_url[:80]))
+            # 导航到下一页
+            _send(ws, 'Page.navigate', {'url': next_url})
+            time.sleep(2)
+            deadline = time.time() + wait_sec
+            while time.time() < deadline:
+                try:
+                    r = _send(ws, 'Runtime.evaluate', {
+                        'expression': 'document.readyState', 'returnByValue': True})
+                    if r.get('result', {}).get('result', {}).get('value', '') == 'complete':
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.5)
+            # 滚动触发懒加载
+            if scroll_times > 0:
+                for _ in range(scroll_times):
+                    _send(ws, 'Runtime.evaluate', {'expression': 'window.scrollBy(0, document.body.scrollHeight);'})
+                    time.sleep(1.0)
+            # 提取当前页帖子链接
+            try:
+                r = _send(ws, 'Runtime.evaluate', {'expression': js_expr, 'returnByValue': True})
+                _raw_val = r.get('result', {}).get('result', {}).get('value', '{}')
+                _debug = json.loads(_raw_val) if isinstance(_raw_val, str) else {}
+                page_links = _debug.get('links', [])
+                new_count = 0
+                for pl in page_links:
+                    if pl not in seen_links:
+                        seen_links.add(pl)
+                        all_links.append(pl)
+                        new_count += 1
+                        if max_posts > 0 and len(all_links) >= max_posts:
+                            break
+                lg('第 %d 页识别到 %d 个新链接（累计 %d 个）' % (page_num, new_count, len(all_links)))
+            except Exception as _e:
+                lg('第 %d 页解析失败: %s' % (page_num, _e))
+        post_links = all_links[:max_posts] if max_posts > 0 else all_links
+        lg('翻页完成，共识别到 %d 个帖子链接' % len(post_links))
     finally:
         if ws:
             try: ws.close()
