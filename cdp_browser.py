@@ -197,7 +197,7 @@ def grab_list_page(url, wait_sec=5, scroll_times=3, max_posts=30, timeout=60, lo
                 _send(ws, 'Runtime.evaluate', {'expression': 'window.scrollBy(0, document.body.scrollHeight);'})
                 time.sleep(1.0)
         # 提取帖子链接的 JavaScript
-        js_expr = "(function(){var out=[];var seen={};var host=location.hostname.replace(/^www\\./,'');var links=document.querySelectorAll('a');var total=links.length;var sameHost=0;links.forEach(function(a){if(!a.href)return;try{var u=new URL(a.href,location.href);}catch(e){return;}if(u.hostname.replace(/^www\\./,'')!==host)return;sameHost++;var p=u.pathname;if(p==='/'||p==='')return;if(!/\d/.test(p))return;var clean=u.origin+u.pathname;if(!seen[clean]){seen[clean]=1;out.push(clean);}});return JSON.stringify({total:total,sameHost:sameHost,found:out.length,links:out,sample:out.slice(0,10)});})()"
+        js_expr = "(function(){var out=[];var seen={};var host=location.hostname.replace(/^www\\./,'');var links=document.querySelectorAll('a');var total=links.length;var sameHost=0;links.forEach(function(a){if(!a.href)return;try{var u=new URL(a.href,location.href);}catch(e){return;}if(u.hostname.replace(/^www\\./,'')!==host)return;sameHost++;var p=u.pathname;if(p==='/'||p==='')return;var clean=u.origin+u.pathname;if(!seen[clean]){seen[clean]=1;out.push(clean);}});return JSON.stringify({total:total,sameHost:sameHost,found:out.length,links:out,sample:out.slice(0,10)});})()"
         r = _send(ws, 'Runtime.evaluate', {'expression': js_expr, 'returnByValue': True})
         _raw_val = r.get('result', {}).get('result', {}).get('value', '{}')
         try:
