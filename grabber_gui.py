@@ -252,8 +252,8 @@ class GrabberApp:
         ttk.Spinbox(opt2, from_=0, to=5000, textvariable=self.limit_var, width=6).pack(side='left')
 
         # 引擎单独一行（避免和上面选项挤在一起）
-        opt2 = ttk.Frame(frm)
-        opt2.grid(row=5, column=0, columnspan=5, sticky='w', **pad)
+        opt3 = ttk.Frame(frm)
+        opt3.grid(row=6, column=0, columnspan=5, sticky='w', **pad)
         ttk.Label(opt3, text='引擎:').pack(side='left', padx=(5, 2))
         self.engine_var = tk.StringVar(value='自动')
         self.engine_combo = ttk.Combobox(opt3, textvariable=self.engine_var, state='readonly', width=6,
