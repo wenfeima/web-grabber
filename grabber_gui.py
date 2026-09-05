@@ -838,6 +838,7 @@ class GrabberApp:
                 if grab_vid:
                     dl_list += [('vid', u) for u in videos]
                 def dl_one(item):
+                    import urllib.parse
                     kind, u = item
                     if self.stop_flag.is_set():
                         return 0
