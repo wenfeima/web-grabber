@@ -791,6 +791,7 @@ class GrabberApp:
         self._log('已请求停止（当前文件下载完成后停止）')
 
     def _run_grab(self, url, save_dir, threads, limit, grab_img, grab_vid, proxy, mode, preview_threads=None):
+        import urllib.parse
         log = self._log
         # 清空任务表格 & 统计
         self._reset_tasks()
