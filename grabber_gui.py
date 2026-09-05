@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v24'
+APP_VERSION = 'v25'
 import os
 import re
 import sys
@@ -657,11 +657,24 @@ class GrabberApp:
         self._launch_debug_edge(edge)
 
     def _launch_debug_edge(self, edge):
-        """启动调试 Edge（独立调试 profile，端口必开；窗口屏幕外启动不弹桌面）"""
+        """启动调试 Edge（独立调试 profile，端口必开）"""
         import edge_profile
+        # 启动前清理 profile 锁文件（Edge 异常退出后残留会导致新实例直接退出）
+        lock_files = ['SingletonLock', 'SingletonCookie', 'SingletonSocket',
+                      'lockfile', 'Lockfile']
+        for _lf in lock_files:
+            try:
+                _fp = os.path.join(edge_profile.DEBUG_PROFILE_DIR, _lf)
+                if os.path.exists(_fp):
+                    os.remove(_fp)
+            except Exception:
+                pass
         try:
             args = [edge, '--remote-debugging-port=9222',
                     '--remote-allow-origins=*',
+                    '--no-first-run',
+                    '--no-default-browser-check',
+                    '--new-window',
                     '--user-data-dir=' + edge_profile.DEBUG_PROFILE_DIR]
             _proc = subprocess.Popen(args)
             self._log('正在启动调试浏览器（Edge 9222 端口，PID=%s）...' % _proc.pid)
@@ -670,7 +683,7 @@ class GrabberApp:
                 import time as _t
                 _t.sleep(3)
                 if _proc.poll() is not None:
-                    self._log('诊断: Edge 进程已退出（退出码=%s），启动失败' % _proc.returncode)
+                    self._log('诊断: Edge 进程已退出（退出码=%s）' % _proc.returncode)
                     return
                 self._log('诊断: Edge 进程仍在运行')
                 try:
