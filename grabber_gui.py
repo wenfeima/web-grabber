@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v28'
+APP_VERSION = 'v30'
 import os
 import re
 import sys
@@ -668,6 +668,7 @@ class GrabberApp:
                 '--remote-allow-origins=*',
                 '--no-first-run',
                 '--no-default-browser-check',
+                '--disable-session-crashed-bubble',
                 '--user-data-dir=' + profile_dir]
         try:
             _proc = subprocess.Popen(args, cwd=os.path.dirname(edge))
@@ -675,7 +676,7 @@ class GrabberApp:
         except Exception as e:
             self._log('启动调试浏览器失败: %s' % e)
             return
-        # 启动后检查进程状态
+        # 启动后检查进程状态 + 端口访问诊断
         def _check():
             import time as _t
             for _sec in (0.5, 1, 2, 5):
@@ -690,11 +691,45 @@ class GrabberApp:
                 except Exception:
                     pass
             self._log('诊断: Edge 持续运行，启动正常')
+            # 5秒后尝试访问调试端口
+            _t.sleep(1)
+            try:
+                import urllib.request as _ur
+                with _ur.urlopen('http://127.0.0.1:9222/json/version', timeout=3) as _resp:
+                    _body = _resp.read().decode('utf-8', errors='replace')[:300]
+                    self._log('诊断: 端口9222可访问! 返回: %s' % _body)
+            except Exception as _e:
+                self._log('诊断: 端口9222无法访问 - %s' % _e)
+                self._log('诊断: 可能是 --remote-debugging-port 参数未生效，尝试换端口9223重启...')
+                # 杀掉当前 Edge，用 9223 端口重启
+                try:
+                    subprocess.run(['taskkill', '/F', '/IM', 'msedge.exe'],
+                                   capture_output=True, text=True, timeout=10)
+                    _t.sleep(2)
+                except Exception:
+                    pass
+                try:
+                    args2 = [edge, '--remote-debugging-port=9223',
+                             '--remote-allow-origins=*',
+                             '--no-first-run', '--no-default-browser-check',
+                             '--user-data-dir=' + profile_dir]
+                    subprocess.Popen(args2, cwd=os.path.dirname(edge))
+                    self._log('诊断: 已用端口9223重新启动 Edge')
+                    _t.sleep(5)
+                    try:
+                        with _ur.urlopen('http://127.0.0.1:9223/json/version', timeout=3) as _resp2:
+                            _body2 = _resp2.read().decode('utf-8', errors='replace')[:300]
+                            self._log('诊断: 端口9223可访问! 返回: %s' % _body2)
+                    except Exception as _e2:
+                        self._log('诊断: 端口9223也无法访问 - %s' % _e2)
+                except Exception as _e3:
+                    self._log('诊断: 9223重启失败: %s' % _e3)
         threading.Thread(target=_check, daemon=True).start()
         threading.Thread(target=self._wait_edge_ready, daemon=True).start()
 
     def _wait_edge_ready(self):
         """后台线程：等调试端口就绪 + 找到 Edge 窗口，回主线程嵌入"""
+        self._log('等待调试端口就绪（最多20秒）...')
         import cdp_browser
         import embed_edge
         ok = False
@@ -714,24 +749,31 @@ class GrabberApp:
             self._log('可能原因: Edge 启动失败 / 端口被占用 / 调试参数未生效')
             self._log('请点「关闭所有Edge」后再试，或手动用命令行启动: msedge.exe --remote-debugging-port=9222')
             return
+        self._log('端口已连接，正在查找 Edge 窗口（最多15秒）...')
         hwnd = embed_edge.find_edge_window(timeout=15)
         if hwnd:
+            self._log('找到 Edge 窗口 (hwnd=%s)，正在嵌入...' % hwnd)
             self._ui_q.put(('embed', hwnd))
+            self._log('已放入嵌入队列，等待主线程处理...')
         else:
             self._log('调试浏览器已就绪，但未找到 Edge 窗口，请稍后再点「启动调试浏览器」')
 
     def _embed_edge_now(self, hwnd):
         """主线程：把 Edge 窗口嵌入「浏览器」页签"""
+        self._log('主线程开始嵌入 Edge (hwnd=%s)...' % hwnd)
         import embed_edge
         host = self.tab_brw_host
         host.update_idletasks()
         w = max(host.winfo_width(), 320)
         h = max(host.winfo_height(), 200)
+        self._log('宿主尺寸: %dx%d, 宿主hwnd=%s' % (w, h, host.winfo_id()))
         try:
             embed_edge.embed_edge(hwnd, int(host.winfo_id()), 0, 0, w, h)
             self.edge_hwnd = hwnd
         except Exception as e:
             self._log('嵌入 Edge 失败: %s' % e)
+            import traceback
+            self._log('详细错误: %s' % traceback.format_exc())
             return
         self._log('Edge 已嵌入「浏览器」页签（可手动浏览/登录，抓取时自动开标签）')
         if hasattr(self, 'tab_brw_hint'):
