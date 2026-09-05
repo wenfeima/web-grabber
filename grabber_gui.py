@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v2.0.4'
+APP_VERSION = 'v2.0.5'
 import os
 import re
 import sys
@@ -338,7 +338,7 @@ class GrabberApp:
         self.tab_brw_host = tk.Frame(tab_brw, bg='#2b2b2b')
         self.tab_brw_host.pack(fill='both', expand=True, padx=2, pady=2)
         self.tab_brw_hint = ttk.Label(tab_brw,
-                                      text='尚未启动调试浏览器——点上方「启动调试浏览器」，Edge 会自动嵌入此区域',
+                                      text='尚未启动调试浏览器——点上方「启动调试浏览器」，Chrome 会自动嵌入此区域',
                                       foreground='#888')
         self.tab_brw_hint.place(relx=0.5, rely=0.5, anchor='center')
         self.tab_brw_host.bind('<Configure>', self._on_host_resize)
@@ -596,15 +596,16 @@ class GrabberApp:
 
     def _on_browser_mode(self):
         if self.browser_mode.get():
-            self._log('浏览器模式：点「启动调试浏览器」一键启动 Edge（9222 端口，含油猴/登录态），或先手动开好调试端口')
+            self._log('浏览器模式：点「启动调试浏览器」一键启动浏览器（9222 端口，含油猴/登录态，优先Chrome回退Edge），或先手动开好调试端口')
         else:
             self._log('浏览器模式已关闭')
 
     def _open_edge_solo(self):
-        """独立窗口打开 Edge（用同一个调试profile，方便登录Microsoft账户和装插件）"""
-        edge = r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+        """独立窗口打开 Chrome（用同一个调试profile，方便登录Google账户和装插件）"""
+        chrome = BROWSER_EXE
         if not os.path.isfile(edge):
-            edge = r'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
+            self._log('错误: 未找到 Chrome 或 Edge，请安装浏览器后再试')
+            return
         if not os.path.isfile(edge):
             self._log('错误: 未找到 Edge')
             return
@@ -619,13 +620,13 @@ class GrabberApp:
             except Exception:
                 pass
         # 不加 --remote-debugging-port，普通方式启动（独立窗口）
-        args = [edge, '--no-first-run', '--no-default-browser-check',
+        args = [chrome, '--no-first-run', '--no-default-browser-check',
                 '--disable-session-crashed-bubble',
                 '--user-data-dir=' + profile_dir]
         try:
             subprocess.Popen(args, cwd=os.path.dirname(edge))
             self._log('已独立窗口打开 Edge（同一个调试profile）')
-            self._log('请在这个窗口里登录Microsoft账户、装好需要的插件，完成后关闭窗口')
+            self._log('请在这个窗口里登录Google账户、装好需要的插件，完成后关闭窗口')
             self._log('然后再点「启动调试浏览器」，登录态和插件就会在内嵌浏览器里生效')
         except Exception as e:
             self._log('独立窗口打开 Edge 失败: %s' % e)
@@ -640,17 +641,18 @@ class GrabberApp:
                 return
         except Exception:
             pass
-        edge = r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+        chrome = BROWSER_EXE
         if not os.path.isfile(edge):
-            edge = r'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
+            self._log('错误: 未找到 Chrome 或 Edge，请安装浏览器后再试')
+            return
         if not os.path.isfile(edge):
-            self._log('错误: 未找到 Edge，请安装 Microsoft Edge 后再试')
+            self._log('错误: 未找到 Chrome，请安装 Google Chrome 后再试')
             return
         import edge_profile
         if not edge_profile.profile_exists():
             # 首次：需要复制默认配置到独立调试 profile（油猴扩展/登录态）
             if edge_profile.is_edge_running():
-                self._log('首次使用浏览器模式需要复制 Edge 配置，请先完全退出 Edge（含后台）后再点「启动调试浏览器」')
+                self._log('首次使用浏览器模式需要复制 Chrome 配置，请先完全退出 Chrome（含后台）后再点「启动调试浏览器」')
                 return
             if not messagebox.askyesno(
                     '首次使用浏览器模式',
@@ -665,16 +667,16 @@ class GrabberApp:
         if edge_profile.is_edge_running():
             if not messagebox.askyesno(
                     '需要关闭 Edge',
-                    '检测到 Edge 正在运行，启动调试浏览器需要先关闭所有 Edge 窗口。\n'
+                    '检测到 Chrome 正在运行，启动调试浏览器需要先关闭所有 Chrome 窗口。\n'
                     '请先保存好你正在浏览的内容，关闭后会自动启动调试模式的 Edge。\n\n是否继续？'):
                 self._log('已取消启动调试浏览器')
                 return
-            self._log('正在关闭所有 Edge 进程...')
+            self._log('正在关闭所有 Chrome 进程...')
             try:
                 import subprocess as _sp
                 # 杀两次，确保子进程也死干净
                 for _k in range(2):
-                    _sp.run(['taskkill', '/F', '/IM', 'msedge.exe'],
+                    _sp.run(['taskkill', '/F', '/IM', BROWSER_PROCESS],
                             capture_output=True, text=True, timeout=10)
                     import time as _time
                     _time.sleep(1)
@@ -682,10 +684,10 @@ class GrabberApp:
                 for _wait in range(20):
                     _time.sleep(0.5)
                     try:
-                        _r = _sp.run(['tasklist', '/FI', 'IMAGENAME eq msedge.exe'],
+                        _r = _sp.run(['tasklist', '/FI', 'IMAGENAME eq ' + BROWSER_PROCESS],
                                       capture_output=True, text=True, timeout=5)
-                        if 'msedge.exe' not in _r.stdout:
-                            self._log('所有 Edge 进程已关闭')
+                        if BROWSER_PROCESS not in _r.stdout:
+                            self._log('所有 Chrome 进程已关闭')
                             break
                     except Exception:
                         break
@@ -696,7 +698,7 @@ class GrabberApp:
         self._launch_debug_edge(edge)
 
     def _first_time_edge_setup(self, edge):
-        """后台线程：复制 Edge 配置后启动调试浏览器"""
+        """后台线程：复制 Chrome 配置后启动调试浏览器"""
         import edge_profile
         ok, msg = edge_profile.copy_profile(log=self._log)
         if not ok:
@@ -718,7 +720,7 @@ class GrabberApp:
                     os.remove(_fp)
             except Exception:
                 pass
-        args = [edge, '--remote-debugging-port=9222',
+        args = [chrome, '--remote-debugging-port=9222',
                 '--remote-allow-origins=*',
                 '--no-first-run',
                 '--no-default-browser-check',
@@ -726,7 +728,7 @@ class GrabberApp:
                 '--user-data-dir=' + profile_dir]
         try:
             _proc = subprocess.Popen(args, cwd=os.path.dirname(edge))
-            self._log('正在启动调试浏览器（Edge 9222 端口，PID=%s）...' % _proc.pid)
+            self._log('正在启动调试浏览器（9222 端口，PID=%s）...' % _proc.pid)
         except Exception as e:
             self._log('启动调试浏览器失败: %s' % e)
             return
@@ -763,7 +765,7 @@ class GrabberApp:
             self._ui_q.put(('embed', hwnd))
             self._log('已放入嵌入队列，等待主线程处理...')
         else:
-            self._log('调试浏览器已就绪，但未找到 Edge 窗口，请稍后再点「启动调试浏览器」')
+            self._log('调试浏览器已就绪，但未找到 Chrome 窗口，请稍后再点「启动调试浏览器」')
 
     def _embed_edge_now(self, hwnd):
         """主线程：把 Edge 窗口嵌入「浏览器」页签"""

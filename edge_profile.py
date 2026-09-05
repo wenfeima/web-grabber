@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Edge 调试专用 profile：把默认配置（油猴扩展/登录态）复制到独立目录。
+"""Chrome 调试专用 profile：把默认配置（油猴扩展/登录态）复制到独立目录。
 
 背景：Chrome/Edge 136+ 起，浏览器用「默认 user data 目录」启动时，
 --remote-debugging-port 会被安全策略忽略，必须搭配 --user-data-dir 指向
@@ -8,8 +8,8 @@
 import os
 import subprocess
 
-DEFAULT_EDGE_UD = os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Microsoft', 'Edge', 'User Data')
-DEBUG_PROFILE_DIR = os.path.join(os.environ.get('LOCALAPPDATA', ''), 'WebGrabber', 'edge_debug_profile')
+DEFAULT_CHROME_UD = os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Google', 'Chrome', 'User Data')
+DEBUG_PROFILE_DIR = os.path.join(os.environ.get('LOCALAPPDATA', ''), 'WebGrabber', 'chrome_debug_profile')
 
 # 复制时排除的缓存/无关目录（保留 Extensions / Local Storage / Cookies 等关键数据）
 EXCLUDE_DIRS = [
@@ -30,26 +30,26 @@ def profile_exists():
 def is_edge_running():
     """检测是否有 msedge 进程在运行（复制期间会锁文件）"""
     try:
-        out = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq msedge.exe'],
+        out = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq chrome.exe'],
                              capture_output=True, text=True, timeout=10).stdout
-        return 'msedge.exe' in out
+        return 'chrome.exe' in out
     except Exception:
         return False
 
 
 def copy_profile(log=None):
-    """把默认 Edge 配置复制到调试 profile（排除缓存），返回 (ok, message)"""
+    """把默认 Chrome 配置复制到调试 profile（排除缓存），返回 (ok, message)"""
     def lg(m):
         if log:
             log(m)
-    if not os.path.isdir(DEFAULT_EDGE_UD):
-        return False, '未找到 Edge 默认配置目录'
+    if not os.path.isdir(DEFAULT_CHROME_UD):
+        return False, '未找到 Chrome 默认配置目录'
     try:
         os.makedirs(DEBUG_PROFILE_DIR, exist_ok=True)
     except Exception as e:
         return False, '无法创建调试配置目录: %s' % e
-    lg('开始复制 Edge 配置（油猴扩展 + 登录态，约几百 MB，首次仅一次，请稍候）...')
-    cmd = ['robocopy', DEFAULT_EDGE_UD, DEBUG_PROFILE_DIR, '/E',
+    lg('开始复制 Chrome 配置（油猴扩展 + 登录态，约几百 MB，首次仅一次，请稍候）...')
+    cmd = ['robocopy', DEFAULT_CHROME_UD, DEBUG_PROFILE_DIR, '/E',
            '/XD'] + EXCLUDE_DIRS + [
         '/XF', '*.tmp', '/NFL', '/NDL', '/NJH', '/NJS', '/NP', '/R:1', '/W:1']
     try:
@@ -58,7 +58,7 @@ def copy_profile(log=None):
         return False, '复制进程异常: %s' % e
     # robocopy 退出码：0-7 表示成功（含复制了文件/未变化），8+ 为错误
     if p.returncode >= 8:
-        return False, '复制失败（robocopy 错误码 %d），请确认 Edge 已完全退出' % p.returncode
+        return False, '复制失败（robocopy 错误码 %d），请确认 Chrome 已完全退出' % p.returncode
     # 删除 First Run 标记，避免复制出的 profile 弹首次设置向导
     for name in ('First Run', 'First Run Dev'):
         fr = os.path.join(DEBUG_PROFILE_DIR, name)
@@ -67,5 +67,5 @@ def copy_profile(log=None):
                 os.remove(fr)
             except Exception:
                 pass
-    lg('Edge 调试配置复制完成，后续启动无需再复制')
+    lg('Chrome 调试配置复制完成，后续启动无需再复制')
     return True, 'ok'

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Edge 窗口内嵌：把调试模式的 Edge 窗口嵌入 tkinter Frame（Win32 SetParent）。
+"""Chrome 窗口内嵌：把调试模式的 Chrome 窗口嵌入 tkinter Frame（Win32 SetParent）。
 用于「浏览器模式」，内嵌后 Edge 不弹独立窗口，油猴脚本/登录态照常生效。"""
 import ctypes
 import ctypes.wintypes as wt
@@ -43,8 +43,8 @@ def _set_window_long(hwnd, idx, val):
         return user32.SetWindowLongW(wt.HWND(hwnd), idx, val)
 
 
-def _is_msedge(pid):
-    """按 PID 判断进程是否为 msedge.exe"""
+def _is_chrome(pid):
+    """按 PID 判断进程是否为 chrome.exe"""
     h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not h:
         return False
@@ -52,15 +52,15 @@ def _is_msedge(pid):
         buf = ctypes.create_unicode_buffer(1024)
         size = wt.DWORD(1024)
         if kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
-            return buf.value.lower().endswith('msedge.exe')
+            return buf.value.lower().endswith('chrome.exe')
         return False
     finally:
         kernel32.CloseHandle(h)
 
 
 def find_edge_window(timeout=20):
-    """等待并返回调试 Edge 的顶层主窗口 HWND；超时返回 None。
-    匹配条件：类名 Chrome_WidgetWin_1 + 可见 + 顶层 + msedge 进程。"""
+    """等待并返回调试 Chrome 的顶层主窗口 HWND；超时返回 None。
+    匹配条件：类名 Chrome_WidgetWin_1 + 可见 + 顶层 + chrome 进程。"""
     deadline = time.time() + timeout
     found = []
 
@@ -75,7 +75,7 @@ def find_edge_window(timeout=20):
             return True
         pid = wt.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        if _is_msedge(pid.value):
+        if _is_chrome(pid.value):
             found.append(hwnd)
         return True
 
@@ -89,7 +89,7 @@ def find_edge_window(timeout=20):
 
 
 def embed_edge(hwnd_edge, hwnd_host, x=0, y=0, w=800, h=600):
-    """把 Edge 窗口设为 host 的子窗口：去系统边框、随宿主缩放"""
+    """把 Chrome 窗口设为 host 的子窗口：去系统边框、随宿主缩放"""
     user32.SetParent(wt.HWND(hwnd_edge), wt.HWND(hwnd_host))
     style = _get_window_long(hwnd_edge, GWL_STYLE)
     style = (style | WS_CHILD) & ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME
@@ -103,5 +103,5 @@ def embed_edge(hwnd_edge, hwnd_host, x=0, y=0, w=800, h=600):
 
 
 def resize_edge(hwnd_edge, x, y, w, h):
-    """随宿主窗口尺寸变化同步调整 Edge 窗口"""
+    """随宿主窗口尺寸变化同步调整 Chrome 窗口"""
     user32.MoveWindow(wt.HWND(hwnd_edge), x, y, w, h, True)
