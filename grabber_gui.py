@@ -619,6 +619,7 @@ class GrabberApp:
         import edge_profile
         try:
             args = [edge, '--remote-debugging-port=9222',
+                    '--remote-allow-origins=*',
                     '--window-position=-32000,-32000',
                     '--user-data-dir=' + edge_profile.DEBUG_PROFILE_DIR]
             subprocess.Popen(args)
