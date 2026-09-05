@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v30'
+APP_VERSION = 'v31'
 import os
 import re
 import sys
@@ -730,24 +730,26 @@ class GrabberApp:
     def _wait_edge_ready(self):
         """后台线程：等调试端口就绪 + 找到 Edge 窗口，回主线程嵌入"""
         self._log('等待调试端口就绪（最多20秒）...')
-        import cdp_browser
+        import urllib.request as _ur
         import embed_edge
         ok = False
+        last_err = ''
         for _try in range(40):
             time.sleep(0.5)
             if _try == 19:
                 self._log('等待调试端口中...（已等10秒，Edge 启动较慢请稍候）')
             try:
-                if cdp_browser.is_connected():
+                with _ur.urlopen('http://127.0.0.1:9222/json/version', timeout=2) as _r:
+                    _body = _r.read().decode('utf-8', errors='replace')[:100]
                     ok = True
-                    self._log('调试端口 9222 已连接（尝试 %d 次）' % (_try + 1))
+                    self._log('调试端口 9222 已连接（尝试 %d 次），返回: %s' % (_try + 1, _body))
                     break
-            except Exception:
-                pass
+            except Exception as _e:
+                last_err = str(_e)[:80]
+                if _try == 5:
+                    self._log('诊断: 前5次连接失败，最后错误: %s' % last_err)
         if not ok:
-            self._log('错误: 20秒内未连上 Edge 调试端口 9222')
-            self._log('可能原因: Edge 启动失败 / 端口被占用 / 调试参数未生效')
-            self._log('请点「关闭所有Edge」后再试，或手动用命令行启动: msedge.exe --remote-debugging-port=9222')
+            self._log('错误: 20秒内未连上 Edge 调试端口 9222，最后错误: %s' % last_err)
             return
         self._log('端口已连接，正在查找 Edge 窗口（最多15秒）...')
         hwnd = embed_edge.find_edge_window(timeout=15)
