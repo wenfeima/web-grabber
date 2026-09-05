@@ -197,26 +197,7 @@ def grab_list_page(url, wait_sec=5, scroll_times=3, max_posts=30, timeout=60, lo
                 _send(ws, 'Runtime.evaluate', {'expression': 'window.scrollBy(0, document.body.scrollHeight);'})
                 time.sleep(1.0)
         # 提取帖子链接的 JavaScript
-        js_expr = (
-            "(function(){"
-            "var links=document.querySelectorAll('a[href]');"
-            "var out=[];var seen={};"
-            "var host=location.hostname.replace(/^www\\./,'');"
-            "var skip=['/','/index','/home','/category','/tag','/tags','/search','/page','/about','/contact','/login','/register','/user','/users','/member','/members'];"
-            "links.forEach(function(a){"
-            "if(!a.href)return;"
-            "try{var u=new URL(a.href,location.href);}catch(e){return;}"
-            "if(u.hostname.replace(/^www\\./,'')!==host)return;"
-            "var p=u.pathname;if(p==='/'||p==='')return;"
-            "for(var i=0;i<skip.length;i++){if(p.indexOf(skip[i])===0)return;}"
-            "var parts=p.split('/').filter(Boolean);"
-            "if(parts.length<2&&!/\\d/.test(p))return;"
-            "var clean=u.origin+u.pathname;"
-            "if(!seen[clean]){seen[clean]=1;out.push(clean);}"
-            "});"
-            "return out;"
-            "})()"
-        )
+        js_expr = "(function(){var out=[];var seen={};var host=location.hostname.replace(/^www\\./,'');var skip=['/','/index','/home','/category','/tag','/tags','/search','/page','/about','/contact','/login','/register','/user','/users','/member','/members'];var links=document.querySelectorAll('a');links.forEach(function(a){if(!a.href)return;try{var u=new URL(a.href,location.href);}catch(e){return;}if(u.hostname.replace(/^www\\./,'')!==host)return;var p=u.pathname;if(p==='/'||p==='')return;for(var i=0;i<skip.length;i++){if(p.indexOf(skip[i])===0)return;}var hasImg=a.querySelector('img');var text=(a.textContent||'').trim();if(hasImg||text.length>=4){var clean=u.origin+u.pathname;if(!seen[clean]){seen[clean]=1;out.push(clean);}}});return out;})()"
         r = _send(ws, 'Runtime.evaluate', {'expression': js_expr, 'returnByValue': True})
         post_links = r.get('result', {}).get('result', {}).get('value', []) or []
         if max_posts > 0:
