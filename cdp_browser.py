@@ -41,6 +41,16 @@ def close_page(target_id):
         pass
 
 
+def open_url(url):
+    '在调试浏览器里新建标签页打开指定网址，返回 target_id'
+    try:
+        target_id, _ = _new_page(url)
+        return target_id
+    except Exception as e:
+        print('open_url 失败: %s' % e)
+        return None
+
+
 def _send(ws, method, params=None, msg_id=None):
     if msg_id is None:
         msg_id = int(time.time() * 1000) % 1000000

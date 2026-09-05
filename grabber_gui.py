@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v36'
+APP_VERSION = 'v37'
 import os
 import re
 import sys
@@ -428,10 +428,24 @@ class GrabberApp:
             root = '%s://%s' % (p.scheme, p.netloc)
         except Exception:
             root = url
+        # 浏览器模式已启动：直接在内嵌浏览器里打开网址，登录态自动保存在 Edge profile
+        try:
+            import cdp_browser
+            if cdp_browser.is_connected():
+                cdp_browser.open_url(root)
+                self._log('已在内嵌浏览器打开: %s（登录后直接抓取即可，登录态自动保留）' % root)
+                try:
+                    self.nb.select(2)
+                except Exception:
+                    pass
+                return
+        except Exception as e:
+            self._log('内嵌浏览器打开失败，回退独立登录窗口: %s' % e)
+
+        # 浏览器模式未启动：用原来的独立登录窗口（兼容直连模式）
         self._log('打开登录窗口: %s' % root)
         try:
             if getattr(sys, 'frozen', False):
-                # exe 模式：直接运行登录窗口 exe，传入 cookie 文件路径
                 subprocess.Popen([LOGIN_HELPER, root, LOGIN_COOKIE_FILE],
                                  cwd=os.path.dirname(LOGIN_HELPER),
                                  creationflags=getattr(subprocess, 'CREATE_NEW_CONSOLE', 0))
@@ -440,7 +454,6 @@ class GrabberApp:
                                  cwd=APP_DIR, creationflags=getattr(subprocess, 'CREATE_NEW_CONSOLE', 0))
         except Exception as e:
             self._log('登录窗口启动失败: %s' % e)
-        # 轮询等待 cookie 文件生成
         self._wait_cookie()
 
     def _wait_cookie(self, tries=40):
