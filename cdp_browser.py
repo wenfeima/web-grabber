@@ -104,20 +104,17 @@ def grab_page(url, wait_sec=5, scroll_times=0, max_images=0, timeout=60, log=Non
   var imgs = document.querySelectorAll('img');
   var out = [];
   var seen = {};
-  var skipKw = ['logo','avatar','icon','qrcode','qr-code','ad-','banner','head','portrait','gravatar','emoji','smile','loading','spinner','placeholder','default'];
-  var thumbKw = ['thumb','small','mini','_100x','_150x','_200x','_250x','_300x','?w=100','?w=150','?w=200','?w=250','?w=300','/s/','/m/'];
+  var skipKw = ['logo','avatar','qrcode','qr-code','emoji','smile','spinner','placeholder'];
   function add(u, w, h){
     if(!u) return;
     u = u.trim();
     if(!u || u.startsWith('data:') || u.startsWith('blob:')) return;
     try{ u = new URL(u, location.href).href; }catch(e){ return; }
     var low = u.toLowerCase();
-    // 过滤无关关键词
+    // 只过滤明显的无关图（logo/头像/二维码/表情）
     for(var i=0;i<skipKw.length;i++){ if(low.indexOf(skipKw[i])>=0) return; }
-    // 过滤缩略图
-    for(var i=0;i<thumbKw.length;i++){ if(low.indexOf(thumbKw[i])>=0) return; }
-    // 过滤小图（logo/头像/二维码通常小于200px）
-    if(w && h && (w < 200 || h < 200)) return;
+    // 只过滤极小图（<50px的图标/logo），不过滤正常缩略图
+    if(w && h && (w < 50 && h < 50)) return;
     if(!seen[u]){ seen[u]=1; out.push(u); }
   }
   imgs.forEach(function(im){
