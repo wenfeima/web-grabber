@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通用网页图片/视频抓取工具 - 主程序 (GUI)"""
 # 版本号：每次修改后递增，用于界面标题区分版本
-APP_VERSION = 'v20'
+APP_VERSION = 'v21'
 import os
 import re
 import sys
@@ -243,22 +243,25 @@ class GrabberApp:
         self.limit_var = tk.StringVar(value='0')
         ttk.Spinbox(opt, from_=0, to=5000, textvariable=self.limit_var, width=6).pack(side='left')
 
-        ttk.Label(opt, text='  引擎:').pack(side='left', padx=(12, 2))
+        # 引擎单独一行（避免和上面选项挤在一起）
+        opt2 = ttk.Frame(frm)
+        opt2.grid(row=5, column=0, columnspan=5, sticky='w', **pad)
+        ttk.Label(opt2, text='引擎:').pack(side='left', padx=(5, 2))
         self.engine_var = tk.StringVar(value='自动')
-        self.engine_combo = ttk.Combobox(opt, textvariable=self.engine_var, state='readonly', width=6,
+        self.engine_combo = ttk.Combobox(opt2, textvariable=self.engine_var, state='readonly', width=6,
                                          values=('自动', '内置', 'IDM', 'aria2'))
         self.engine_combo.pack(side='left', padx=2)
         self.engine_combo.bind('<<ComboboxSelected>>', lambda e: self._on_engine_change())
-        self.engine_hint = ttk.Label(opt, text='', foreground='#888')
+        self.engine_hint = ttk.Label(opt2, text='', foreground='#888')
         self.engine_hint.pack(side='left', padx=(6, 0))
 
-        # ---- 第5行：登录状态 + 按钮 ----
+        # ---- 第6行：登录状态 + 按钮 ----
         self.login_label = ttk.Label(frm, text='登录状态: 未登录（不需要登录的网站可忽略）',
                                      foreground='#666')
-        self.login_label.grid(row=5, column=0, columnspan=5, sticky='w', **pad)
+        self.login_label.grid(row=6, column=0, columnspan=5, sticky='w', **pad)
 
         btns = ttk.Frame(frm)
-        btns.grid(row=6, column=0, columnspan=5, sticky='we', **pad)
+        btns.grid(row=7, column=0, columnspan=5, sticky='we', **pad)
         # 左侧：辅助按钮
         ttk.Button(btns, text='登录（可选）', command=self._open_login).pack(side='left', padx=5)
         ttk.Button(btns, text='清除登录', command=self._clear_login).pack(side='left', padx=5)
