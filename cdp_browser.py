@@ -4,6 +4,7 @@
 import json
 import time
 import urllib.request
+import urllib.parse
 import websocket
 
 DEBUG_PORT = 9222
